@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/schema/v1.json",
+  "agents_dir": "agents",
+  "commands_file": "commands/prumo.json",
+  "guards_file": "guards/tool-policy.json",
+  "hooks": {
+    "on_session_end": true,
+    "on_session_start": true,
+    "on_tool_after": true,
+    "on_tool_before": true
+  },
+  "name": "Prumo OpenCode Integration",
+  "plugin": [
+    "plugins/prumo.ts"
+  ],
+  "primary_agent": "agents/prumo.md",
+  "skills_dir": "skills",
+  "version": "0.6.0"
+}

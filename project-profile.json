@@ -1,0 +1,10 @@
+{
+  "name": "photoshow",
+  "description": "Visualizador de fotos rápido com egui 0.36: abrir pastas/arquivos, navegar, zoom/pan/fullscreen, edição não-destrutiva rotate/crop.",
+  "profile": "desktop-gui",
+  "stack": ["rust", "eframe-0.36", "egui-0.36", "egui_taffy", "image-processing", "rfd-native-dialog"],
+  "features": ["open-folder", "open-files", "thumbnails", "zoom-pan-fullscreen", "rotate-crop-nondestructive", "exif-auto-rotate", "save-save-as"],
+  "risks": ["filesystem-write"],
+  "capabilities": ["desktop-gui", "ui", "core"],
+  "ai": {"preferred_models": ["local-default", "cloud-standard"]}
+}

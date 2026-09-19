@@ -1,0 +1,34 @@
+{
+  "commands": [
+    {
+      "action": "prumo goal",
+      "description": "Manage Prumo goals",
+      "name": "goal"
+    },
+    {
+      "action": "prumo plan",
+      "description": "Inspect Living Plan",
+      "name": "plan"
+    },
+    {
+      "action": "prumo trace",
+      "description": "Trace requirements to code and evidence",
+      "name": "trace"
+    },
+    {
+      "action": "prumo experience",
+      "description": "View experience events and handoff",
+      "name": "experience"
+    },
+    {
+      "action": "prumo adopt",
+      "description": "Scan and adopt repository",
+      "name": "adopt"
+    },
+    {
+      "action": "prumo status",
+      "description": "Show Prumo project status",
+      "name": "status"
+    }
+  ]
+}

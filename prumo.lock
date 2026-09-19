@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "packages": [
+    {
+      "id": "lang-rust",
+      "version": "0.6.0",
+      "checksum": "0e11e9c8c72b5fd25a93cda2957d23f5a889ccb8b902488218e7c009f70e6460",
+      "type": "skill"
+    },
+    {
+      "id": "rust-analyzer-context-indexing",
+      "version": "0.6.0",
+      "checksum": "9daebd8b180e754a1cbf242ec9c1e00c5b1f9e768e863cb8d217099942f2edd7",
+      "type": "skill"
+    }
+  ]
+}

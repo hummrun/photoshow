@@ -1,0 +1,26 @@
+{
+  "blocked_commands": [
+    "rm -rf /",
+    "rm -rf /*",
+    "mkfs",
+    ":(){ :|:\u0026 };:",
+    "dd if=/dev/zero"
+  ],
+  "enforcement": "strict",
+  "primitives": [
+    "pre_tool_block",
+    "post_tool_verify",
+    "restrict_tools"
+  ],
+  "protected_paths": [
+    ".git/",
+    ".prumo/credentials",
+    ".env"
+  ],
+  "require_confirmation": [
+    "git push --force",
+    "git reset --hard",
+    "git clean -fdx"
+  ],
+  "version": "0.6.0"
+}

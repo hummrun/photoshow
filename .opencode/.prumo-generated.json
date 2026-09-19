@@ -1,0 +1,20 @@
+{
+  "created_paths": [
+    ".opencode/guards/tool-policy.json",
+    ".opencode/plugins/prumo.ts",
+    ".opencode/agents/prumo.md",
+    ".opencode/agents/architect.md",
+    ".opencode/agents/executor.md",
+    ".opencode/agents/verifier.md",
+    ".opencode/skills/evidence-collection/SKILL.md",
+    ".opencode/skills/code-review/SKILL.md",
+    ".opencode/skills/goal-management/SKILL.md",
+    ".opencode/commands/prumo.json",
+    ".opencode/opencode.json"
+  ],
+  "generator": "opencode-compiler",
+  "managed": true,
+  "prumo_generated": true,
+  "prumo_version": "0.6.0",
+  "target": "opencode"
+}

@@ -1,0 +1,34 @@
+[package]
+name = "photoshow"
+version = "0.1.0-rc1"
+edition = "2024"
+rust-version = "1.95"
+description = "Visualizador de fotos rápido com egui: pastas/arquivos, zoom/pan, rotate/crop não-destrutivo."
+
+[dependencies]
+eframe = "0.36"
+egui = "0.36"
+egui-dropdown = "0.16"
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
+rfd = "0.17"
+kamadak-exif = "0.6"
+ignore = "0.4"
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+directories = "6"
+arboard = "3"
+open = "5"
+egui_dock = "0.21"
+egui-phosphor = "0.14"
+egui-elegance = "0.16"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+codegen-units = 1
