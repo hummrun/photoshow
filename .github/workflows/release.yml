@@ -97,7 +97,7 @@ jobs:
         with:
           files: |
             photoshow-*.tar.gz
-            photoshow-*.deb
+            photoshow_*.deb
             photoshow-*.rpm
             photoshow-*.zip
           generate_release_notes: true
