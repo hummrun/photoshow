@@ -56,6 +56,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-generate-rpm
+      # generate-rpm não compila sozinho (ao contrário do cargo-deb)
+      - run: cargo build --release --locked
       - run: cargo generate-rpm
       - uses: actions/upload-artifact@v4
         with:
