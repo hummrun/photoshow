@@ -3,7 +3,10 @@ name = "photoshow"
 version = "0.1.0-rc1"
 edition = "2024"
 rust-version = "1.95"
-description = "Visualizador de fotos rápido com egui: pastas/arquivos, zoom/pan, rotate/crop não-destrutivo."
+description = "Fast photo viewer with light non-destructive editing."
+license = "MIT"
+homepage = "https://github.com/raillen/photoshow"
+repository = "https://github.com/raillen/photoshow"
 
 [dependencies]
 eframe = "0.36"
@@ -32,3 +35,33 @@ opt-level = 3
 lto = "thin"
 strip = true
 codegen-units = 1
+
+[package.metadata.deb]
+maintainer = "Raillen <raillen@users.noreply.github.com>"
+copyright = "2026, Raillen"
+license-file = ["LICENSE-MIT", "0"]
+section = "graphics"
+priority = "optional"
+depends = "libgl1"
+extended-description = """\
+Fast photo viewer with light non-destructive editing: folders, \
+thumbnails, zoom/pan, rotate/crop, EXIF auto-rotation."""
+assets = [
+  ["target/release/photoshow", "usr/bin/", "755"],
+  ["dist/photoshow.desktop", "usr/share/applications/", "644"],
+  ["assets/icons/photoshow.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+  ["LICENSE-MIT", "usr/share/doc/photoshow/", "644"],
+  ["README.md", "usr/share/doc/photoshow/", "644"],
+]
+
+[package.metadata.generate-rpm]
+# TODO(0.1.0 final): remover este override (usa a versão do [package]).
+# "~rc1" é a convenção RPM para pré-release: ordena abaixo de 0.1.0 final.
+version = "0.1.0~rc1"
+assets = [
+  { source = "target/release/photoshow", dest = "/usr/bin/photoshow", mode = "755" },
+  { source = "dist/photoshow.desktop", dest = "/usr/share/applications/photoshow.desktop", mode = "644" },
+  { source = "assets/icons/photoshow.svg", dest = "/usr/share/icons/hicolor/scalable/apps/photoshow.svg", mode = "644" },
+  { source = "LICENSE-MIT", dest = "/usr/share/licenses/photoshow/LICENSE-MIT", mode = "644" },
+  { source = "README.md", dest = "/usr/share/doc/photoshow/README.md", mode = "644" },
+]

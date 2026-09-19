@@ -1,0 +1,33 @@
+app-id: io.github.raillen.photoshow
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: photoshow
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Pastas de fotos do usuário (o app também abre via portal de arquivos):
+  - --filesystem=home
+modules:
+  - name: photoshow
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_NET_OFFLINE: 'true'
+        CARGO_HOME: /run/build/photoshow/cargo-home
+    build-commands:
+      - cargo --offline build --release --frozen
+      - install -Dm755 target/release/photoshow /app/bin/photoshow
+      - install -Dm644 dist/photoshow.desktop /app/share/applications/io.github.raillen.photoshow.desktop
+      - install -Dm644 assets/icons/photoshow.svg /app/share/icons/hicolor/scalable/apps/io.github.raillen.photoshow.svg
+      - install -Dm644 assets/metainfo/io.github.raillen.photoshow.metainfo.xml /app/share/metainfo/io.github.raillen.photoshow.metainfo.xml
+    sources:
+      - type: dir
+        path: ../..
+      # Gerado com flatpak-cargo-generator.py a partir do Cargo.lock:
+      #   python3 flatpak-cargo-generator.py Cargo.lock -o cargo-sources.json
+      - type: file
+        path: cargo-sources.json

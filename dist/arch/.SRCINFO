@@ -1,0 +1,15 @@
+pkgbase = photoshow
+	pkgdesc = Fast photo viewer with light non-destructive editing
+	pkgver = 0.1.0rc1
+	pkgrel = 1
+	url = https://github.com/raillen/photoshow
+	arch = x86_64
+	license = MIT
+	makedepends = cargo
+	depends = gcc-libs
+	depends = glibc
+	depends = mesa
+	source = photoshow-0.1.0rc1.tar.gz::https://github.com/raillen/photoshow/archive/refs/tags/v0.1.0-rc1.tar.gz
+	sha256sums = SKIP
+
+pkgname = photoshow

@@ -1,0 +1,102 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux-tarball:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - name: stage tarball
+        run: |
+          STAGE="photoshow-${{ github.ref_name }}-x86_64-unknown-linux-gnu"
+          mkdir -p "$STAGE"
+          cp target/release/photoshow "$STAGE/"
+          cp dist/photoshow.desktop "$STAGE/"
+          cp assets/icons/photoshow.svg "$STAGE/"
+          cp LICENSE-MIT README.md CHANGELOG.md "$STAGE/"
+          tar czf "$STAGE.tar.gz" "$STAGE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-tarball
+          path: photoshow-*.tar.gz
+
+  deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+      - run: cargo deb --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: target/debian/*.deb
+
+  rpm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-generate-rpm
+      - run: cargo generate-rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm
+          path: target/generate-rpm/*.rpm
+
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked --target x86_64-pc-windows-msvc
+      - name: stage zip
+        shell: pwsh
+        run: |
+          $Stage = "photoshow-${{ github.ref_name }}-x86_64-pc-windows-msvc"
+          New-Item -ItemType Directory -Path $Stage | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/photoshow.exe "$Stage/"
+          Copy-Item LICENSE-MIT,README.md,CHANGELOG.md "$Stage/"
+          Compress-Archive -Path $Stage -DestinationPath "$Stage.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: photoshow-*.zip
+
+  publish:
+    needs: [linux-tarball, deb, rpm, windows-exe]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            photoshow-*.tar.gz
+            photoshow-*.deb
+            photoshow-*.rpm
+            photoshow-*.zip
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, 'rc') }}

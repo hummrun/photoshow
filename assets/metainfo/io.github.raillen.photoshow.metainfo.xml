@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.raillen.photoshow</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>photoshow</name>
+  <summary>Fast photo viewer with light non-destructive editing</summary>
+  <description>
+    <p>
+      Open folders or loose files, browse with thumbnails, zoom and pan,
+      rotate/crop non-destructively with undo/redo, and save back —
+      without ever freezing, even in 50k-file folders.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.raillen.photoshow.desktop</launchable>
+  <url type="homepage">https://github.com/raillen/photoshow</url>
+  <url type="bugtracker">https://github.com/raillen/photoshow/issues</url>
+  <url type="donation">https://ko-fi.com/raillen</url>
+  <content_rating type="oars-1.1" />
+</component>

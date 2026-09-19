@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=photoshow
+Comment=Fast photo viewer with light non-destructive editing
+Exec=photoshow %F
+Icon=photoshow
+Terminal=false
+Categories=Graphics;Photography;Viewer;
+MimeType=image/jpeg;image/png;image/webp;image/tiff;image/bmp;image/gif;
+StartupWMClass=photoshow

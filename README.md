@@ -37,17 +37,29 @@ sem banco de dados, sem nuvem.
 
 ## Instalação
 
-Requer Rust 1.95+.
+Via script (Linux x86_64, sem root — baixa a última release):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/raillen/photoshow/main/install.sh | bash
+```
+
+Por distribuição (na página de [releases](https://github.com/raillen/photoshow/releases)):
+
+| Sistema | Arquivo |
+|---|---|
+| Debian/Ubuntu | `photoshow_*_amd64.deb` (`sudo dpkg -i`) |
+| Fedora/openSUSE | `photoshow-*.x86_64.rpm` (`sudo rpm -i` / `dnf install`) |
+| Arch | `dist/arch/PKGBUILD` ([instruções](./dist/README.md)) |
+| Windows | `photoshow-*-x86_64-pc-windows-msvc.zip` (só extrair o `.exe`) |
+| Qualquer Linux | tarball + `install.sh` acima |
+
+Do código-fonte (requer Rust 1.95+):
 
 ```bash
 cargo install --path .
 # ou rode direto:
 cargo run --release
 ```
-
-Binário pronto em `target/release/photoshow` (~22MB, Linux x86_64).
-Opcional: `~/.local/bin` no `PATH` + o lançador
-`~/.local/share/applications/photoshow.desktop`.
 
 ## Configuração
 
