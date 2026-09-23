@@ -1,0 +1,97 @@
+{
+  "version": 2,
+  "selection_rule": "cheapest-reliable-model-that-passes-gates",
+  "cross_provider_review": true,
+  "context_aware_routing": true,
+  "roster": [
+    {
+      "id": "openai/gpt-5.6-sol",
+      "provider": "openai",
+      "enabled": true
+    },
+    {
+      "id": "moonshot/kimi-k3",
+      "provider": "moonshot",
+      "enabled": true
+    },
+    {
+      "id": "deepseek/v4.1-flash",
+      "provider": "deepseek",
+      "enabled": true
+    }
+  ],
+  "roles": {
+    "architect": {
+      "preferred": [
+        "openai/gpt-5.6-sol",
+        "moonshot/kimi-k3",
+        "deepseek/v4.1-flash"
+      ],
+      "fallback": []
+    },
+    "debugger": {
+      "preferred": [
+        "openai/gpt-5.6-sol",
+        "moonshot/kimi-k3",
+        "deepseek/v4.1-flash"
+      ],
+      "fallback": []
+    },
+    "documentation-maintainer": {
+      "preferred": [
+        "openai/gpt-5.6-sol",
+        "moonshot/kimi-k3",
+        "deepseek/v4.1-flash"
+      ],
+      "fallback": []
+    },
+    "implementer": {
+      "preferred": [
+        "openai/gpt-5.6-sol",
+        "moonshot/kimi-k3",
+        "deepseek/v4.1-flash"
+      ],
+      "fallback": []
+    },
+    "release-verifier": {
+      "preferred": [
+        "openai/gpt-5.6-sol",
+        "moonshot/kimi-k3",
+        "deepseek/v4.1-flash"
+      ],
+      "fallback": []
+    },
+    "reviewer": {
+      "preferred": [
+        "openai/gpt-5.6-sol",
+        "moonshot/kimi-k3",
+        "deepseek/v4.1-flash"
+      ],
+      "fallback": []
+    },
+    "security-reviewer": {
+      "preferred": [
+        "openai/gpt-5.6-sol",
+        "moonshot/kimi-k3",
+        "deepseek/v4.1-flash"
+      ],
+      "fallback": []
+    },
+    "tester": {
+      "preferred": [
+        "openai/gpt-5.6-sol",
+        "moonshot/kimi-k3",
+        "deepseek/v4.1-flash"
+      ],
+      "fallback": []
+    },
+    "ux-reviewer": {
+      "preferred": [
+        "openai/gpt-5.6-sol",
+        "moonshot/kimi-k3",
+        "deepseek/v4.1-flash"
+      ],
+      "fallback": []
+    }
+  }
+}
