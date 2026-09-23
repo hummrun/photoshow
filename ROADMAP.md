@@ -23,7 +23,7 @@ Nenhuma feature grande deve furar os gates desta fase.
 - [x] checksums SHA-256 nas releases
 - [x] smoke test do tarball/installer antes de publicação
 - [x] metadata de save deixou de ser silenciosa: EXIF/ICC são preservados quando seguro/suportado e omissões são informadas
-- [ ] teste de falha de encode imediatamente antes da promoção final
+- [x] teste de falha após escrita temporária imediatamente antes da promoção final
 - [ ] smoke real do workflow de release em tag de pré-release
 
 ### Performance e memória
