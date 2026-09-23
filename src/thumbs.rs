@@ -1,8 +1,8 @@
 //! Faixa de thumbnails: worker único com fila + cache de texturas.
 //!
 //! O worker decodifica (com correção EXIF) para no máximo [`THUMB_MAX`] px;
-//! `update()` deve ser chamado todo frame: enfileira a janela ao redor da
-//! seleção, drena prontos criando texturas e despeja os distantes.
+//! `update()` recebe o intervalo realmente visível da galeria, agenda uma
+//! pequena margem, drena resultados criando texturas e despeja os distantes.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -12,7 +12,7 @@ use crate::exif::{apply_orientation, read_orientation};
 
 /// Maior lado do thumbnail.
 pub const THUMB_MAX: u32 = 160;
-/// Janela ao redor da seleção mantida em cache/enfileirada.
+/// Margem de itens antes/depois do viewport mantida quente.
 const THUMB_MARGIN: usize = 32;
 /// Teto de texturas; além disso, despeja fora da janela.
 const THUMB_CAP: usize = 200;
