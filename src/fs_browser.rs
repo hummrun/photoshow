@@ -378,6 +378,53 @@ mod tests {
     }
 
     #[test]
+    fn superseded_generation_stops_before_walking() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(dir.path().join("a.jpg"), b"x").expect("write");
+        let generation = AtomicU64::new(2);
+
+        let result = walk_photos(dir.path(), scan_opts(), &generation, 1);
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    #[ignore = "manual performance evidence: creates up to 50k filesystem entries"]
+    fn benchmark_scan_synthetic_collections() {
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let controller = ScanController::new();
+        let mut created = 0usize;
+
+        for (generation, target) in [1_000usize, 10_000, 50_000].into_iter().enumerate() {
+            for index in created..target {
+                let path = dir.path().join(format!("image-{index:05}.jpg"));
+                fs::write(path, []).expect("create benchmark entry");
+            }
+            created = target;
+
+            let started = Instant::now();
+            let result = controller
+                .scan(dir.path().to_path_buf(), scan_opts(), generation as u64 + 1)
+                .recv_timeout(Duration::from_secs(120))
+                .expect("benchmark scan finishes");
+            let elapsed = started.elapsed();
+
+            println!(
+                "photoshow_perf scenario=folder_scan entries={} photos={} errors={} elapsed_ms={}",
+                target,
+                result.photos.len(),
+                result.errors_seen,
+                elapsed.as_millis()
+            );
+            assert_eq!(result.files_seen as usize, target);
+            assert_eq!(result.photos.len(), target);
+            assert_eq!(result.errors_seen, 0);
+        }
+    }
+
+    #[test]
     fn hidden_detection_uses_dot_prefix() {
         assert!(is_hidden(Path::new("/a/.config")));
         assert!(!is_hidden(Path::new("/a/fotos")));

@@ -1,8 +1,9 @@
-//! photoshow: visualizador de fotos rápido com egui.
+#![forbid(unsafe_code)]
+
+//! PhotoShow: visualizador de fotos nativo, rápido e intencionalmente pequeno.
 //!
-//! M1: janela eframe 0.36 + abrir pasta/arquivos via rfd + lista lateral.
-//! Fases seguintes: render da imagem (image_store), EXIF e thumbnails,
-//! edição não-destrutiva rotate/crop (editor).
+//! A aplicação mantém decode/media separado do adapter egui, limita trabalho
+//! assíncrono e trata escrita em disco como operação transacional.
 
 mod app;
 mod atomic_file;

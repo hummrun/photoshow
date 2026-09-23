@@ -49,6 +49,44 @@ Do not claim that a renderer, cache strategy, or refactor is faster because it a
 - archive/package size
 - one-line installer smoke test
 
+## Reproducible harness already in-tree
+
+The folder-scan path has a manual ignored benchmark that creates the same synthetic
+collection sizes required by this protocol and times **only the scan**, not fixture
+creation:
+
+```bash
+cargo test --release fs_browser::tests::benchmark_scan_synthetic_collections \
+  -- --ignored --exact --nocapture
+```
+
+It emits machine-readable-ish lines such as:
+
+```text
+photoshow_perf scenario=folder_scan entries=10000 photos=10000 errors=0 elapsed_ms=...
+```
+
+On Linux, combined process peak RSS can also be captured without changing the
+application:
+
+```bash
+/usr/bin/time -v cargo test --release \
+  fs_browser::tests::benchmark_scan_synthetic_collections \
+  -- --ignored --exact --nocapture
+```
+
+The `Maximum resident set size` from that command covers the benchmark process as
+a whole; do not mislabel it as pure scan-cache RSS. Startup, viewer and gallery
+frame-time measurements still require the real GUI/runtime on representative
+hardware.
+
+For release artifact size:
+
+```bash
+cargo build --release --locked
+stat -c '%s bytes' target/release/photoshow
+```
+
 ## Evidence format
 
 Store benchmark evidence under `docs/evidence/performance/` as dated Markdown/JSON. Every report must identify:
