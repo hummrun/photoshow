@@ -13,6 +13,7 @@ mod fs_browser;
 mod icons;
 mod image_store;
 mod media;
+mod metadata;
 mod platform;
 mod thumbs;
 mod ui;
