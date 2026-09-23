@@ -11,7 +11,28 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libegl1-mesa-dev libgl1-mesa-dev \
+            libxcursor-dev libxi-dev libxrandr-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --all-features --locked
+
   linux-tarball:
+    needs: quality-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,6 +68,7 @@ jobs:
           path: photoshow-*.tar.gz
 
   deb:
+    needs: quality-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +84,7 @@ jobs:
           path: target/debian/*.deb
 
   rpm:
+    needs: quality-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -79,6 +102,7 @@ jobs:
           path: target/generate-rpm/*.rpm
 
   windows-exe:
+    needs: quality-gate
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
