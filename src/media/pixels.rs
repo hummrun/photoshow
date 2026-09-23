@@ -33,11 +33,6 @@ impl RgbaFrame {
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
-
-    #[must_use]
-    pub fn byte_len(&self) -> usize {
-        self.bytes.len()
-    }
 }
 
 #[cfg(test)]
@@ -51,6 +46,6 @@ mod tests {
 
         assert_eq!(frame.width(), 3);
         assert_eq!(frame.height(), 2);
-        assert_eq!(frame.byte_len(), 3 * 2 * 4);
+        assert_eq!(frame.bytes().len(), 3 * 2 * 4);
     }
 }
