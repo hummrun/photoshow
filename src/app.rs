@@ -308,6 +308,8 @@ pub struct PhotoShowApp {
     scanning: Option<PathBuf>,
     /// Foto a preservar ao aplicar resultado (rescan com mesmas fotos).
     preserve_on_scan: Option<PathBuf>,
+    /// Intervalo [start, end) realmente visível na galeria neste frame.
+    thumb_viewport: Option<(usize, usize)>,
 }
 
 impl PhotoShowApp {
@@ -363,6 +365,7 @@ impl PhotoShowApp {
             scan_seq: 0,
             scanning: None,
             preserve_on_scan: None,
+            thumb_viewport: None,
         };
         app.apply_theme(&cc.egui_ctx);
         // Reabre a última pasta para navegação imediata.
@@ -487,19 +490,25 @@ impl PhotoShowApp {
         self.scan_rx = None;
         self.scanning = None;
         let dir_label = res.dir.display().to_string();
+        let error_suffix = if res.errors_seen == 0 {
+            String::new()
+        } else {
+            format!(" · {} erro(s) de leitura", res.errors_seen)
+        };
         if res.photos.is_empty() {
             self.status = format!(
-                "Nenhuma imagem em {} ({} arquivos verificados).",
-                dir_label, res.files_seen
+                "Nenhuma imagem em {} ({} arquivos verificados{})",
+                dir_label, res.files_seen, error_suffix
             );
             self.replace_photos(ctx, Vec::new());
             return;
         }
         self.status = format!(
-            "{} fotos em {} ({} arquivos verificados).",
+            "{} fotos em {} ({} arquivos verificados{})",
             res.photos.len(),
             dir_label,
-            res.files_seen
+            res.files_seen,
+            error_suffix
         );
         // Preserva a seleção no rescan (troca de opção de varredura).
         let preserve = self.preserve_on_scan.take().and_then(|p| {
@@ -930,7 +939,7 @@ impl eframe::App for PhotoShowApp {
             let max_bytes = self.cfg.prefetch_max_mb * 1024 * 1024;
             self.store.ensure_prefetched(&self.visible, s, max_bytes);
         }
-        self.thumbs.update(ui.ctx(), &self.visible, self.sel);
+        self.thumb_viewport = None;
 
         // Aspect do crop trocado no dropdown: reaplica ao rect existente.
         if self.crop_aspect_name != self.applied_aspect {
@@ -1159,6 +1168,9 @@ impl eframe::App for PhotoShowApp {
 
         self.show_rename_window(ui);
         self.show_settings_window(ui);
+
+        self.thumbs
+            .update(ui.ctx(), &self.visible, self.thumb_viewport, self.sel);
     }
 }
 
@@ -1944,7 +1956,7 @@ impl PhotoShowApp {
                 changed |= ui
                     .add(
                         egui::Slider::new(&mut self.cfg.prefetch_max_mb, 0..=256)
-                            .text("Prefetch até (MB, 0 = off)"),
+                            .text("Prefetch RAM (MB, 0 = off)"),
                     )
                     .changed();
                 self.cfg.prefetch_max_mb = self.cfg.prefetch_max_mb.min(1024);
@@ -1991,10 +2003,10 @@ impl PhotoShowApp {
         }
     }
 
-    /// Conteúdo da aba Miniaturas (taffy flex row com scroll).
-    /// Sem wrapper de Panel: no dock o contêiner é a própria aba.
-    /// Galeria de miniaturas: grade fluida que se adapta à largura da aba.
-    /// Scroll nativo (sem taffy), tamanho configurável, duplo-clique maximiza.
+    /// Galeria de miniaturas virtualizada por linhas do viewport.
+    ///
+    /// Apenas as linhas visíveis viram widgets. O intervalo de itens resultante
+    /// alimenta o scheduler de thumbnails no fim do frame.
     fn show_filmstrip_content(&mut self, ui: &mut egui::Ui) {
         if self.visible.is_empty() {
             ui.weak("Nenhuma foto.");
@@ -2004,7 +2016,7 @@ impl PhotoShowApp {
             ui.weak("Galeria desativada — ative em Config.");
             return;
         }
-        // Cabeçalho slim: controle de tamanho proporcional.
+
         ui.horizontal(|ui| {
             ui.weak("Tamanho:");
             if ui
@@ -2034,76 +2046,83 @@ impl PhotoShowApp {
 
         let cell = self.cfg.thumb_size;
         let gap = 8.0;
-        let cols = ((ui.available_width() + gap) / (cell + gap))
+        let columns = ((ui.available_width() + gap) / (cell + gap))
             .floor()
             .max(1.0) as usize;
-        let sel = self.sel;
-        // Janela ao redor da seleção (grade grande demais trava o frame).
-        let (lo, hi) = match sel {
-            Some(s) => {
-                let lo = s.saturating_sub(300);
-                let hi = (s + 300).min(self.visible.len().saturating_sub(1));
-                (lo, hi)
-            }
-            None => (0, self.visible.len().saturating_sub(1).min(599)),
-        };
+        let total_rows = self.visible.len().div_ceil(columns);
+        let selected = self.sel;
         let mut clicked: Option<(usize, PhotoPath, bool)> = None;
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            egui::Grid::new("strip_grid")
-                .spacing([gap, gap])
-                .show(ui, |ui| {
-                    for (k, photo) in self.visible[lo..=hi].iter().enumerate() {
-                        let idx = lo + k;
-                        let selected = Some(idx) == sel;
-                        match self.thumbs.get(photo.path()) {
-                            Some(tex) => {
-                                let img = egui::Image::from_texture(egui::load::SizedTexture::new(
-                                    tex.id(),
-                                    egui::Vec2::splat(cell - 4.0),
-                                ));
-                                let resp = ui.add(egui::Button::new(img).frame(false));
-                                // Borda de seleção explícita (independe do tema).
-                                if selected {
-                                    ui.painter().rect_stroke(
-                                        resp.rect.expand(2.0),
-                                        8.0,
-                                        egui::Stroke::new(2.5, Self::ACCENT),
-                                        egui::StrokeKind::Outside,
+        let mut viewport = None;
+
+        egui::ScrollArea::vertical().show_rows(
+            ui,
+            cell + gap,
+            total_rows,
+            |ui, row_range| {
+                let first = row_range.start.saturating_mul(columns);
+                let end = row_range
+                    .end
+                    .saturating_mul(columns)
+                    .min(self.visible.len());
+                viewport = Some((first, end));
+
+                for row in row_range {
+                    let start = row.saturating_mul(columns);
+                    let end = start.saturating_add(columns).min(self.visible.len());
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = gap;
+                        for index in start..end {
+                            let photo = &self.visible[index];
+                            let is_selected = Some(index) == selected;
+                            let response = match self.thumbs.get(photo.path()) {
+                                Some(texture) => {
+                                    let image = egui::Image::from_texture(
+                                        egui::load::SizedTexture::new(
+                                            texture.id(),
+                                            egui::Vec2::splat(cell - 4.0),
+                                        ),
                                     );
+                                    ui.add_sized(
+                                        [cell - 4.0, cell - 4.0],
+                                        egui::Button::new(image).frame(false),
+                                    )
                                 }
-                                if resp.clicked() {
-                                    clicked = Some((idx, photo.clone(), resp.double_clicked()));
+                                None => {
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        egui::Vec2::splat(cell - 4.0),
+                                        egui::Sense::click(),
+                                    );
+                                    ui.painter().rect_filled(
+                                        rect,
+                                        6.0,
+                                        egui::Color32::from_gray(42),
+                                    );
+                                    response
                                 }
-                            }
-                            None => {
-                                let (r, resp) = ui.allocate_exact_size(
-                                    egui::Vec2::splat(cell - 4.0),
-                                    egui::Sense::click(),
+                            };
+
+                            if is_selected {
+                                ui.painter().rect_stroke(
+                                    response.rect.expand(2.0),
+                                    8.0,
+                                    egui::Stroke::new(2.5, Self::ACCENT),
+                                    egui::StrokeKind::Outside,
                                 );
-                                ui.painter()
-                                    .rect_filled(r, 6.0, egui::Color32::from_gray(42));
-                                if selected {
-                                    ui.painter().rect_stroke(
-                                        r.expand(2.0),
-                                        8.0,
-                                        egui::Stroke::new(2.5, Self::ACCENT),
-                                        egui::StrokeKind::Outside,
-                                    );
-                                }
-                                if resp.clicked() {
-                                    clicked = Some((idx, photo.clone(), resp.double_clicked()));
-                                }
+                            }
+                            if response.clicked() {
+                                clicked =
+                                    Some((index, photo.clone(), response.double_clicked()));
                             }
                         }
-                        if (k + 1) % cols == 0 {
-                            ui.end_row();
-                        }
-                    }
-                });
-        });
-        if let Some((i, p, double)) = clicked {
-            self.select_photo(ui.ctx(), i, p);
-            // Duplo-clique maximiza o Visualizador (restaura com F9).
+                    });
+                }
+            },
+        );
+
+        self.thumb_viewport = viewport;
+
+        if let Some((index, photo, double)) = clicked {
+            self.select_photo(ui.ctx(), index, photo);
             if double && !self.maximized {
                 self.toggle_maximize();
             }
