@@ -6,7 +6,9 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::editor::EditorState;
@@ -31,6 +33,11 @@ struct LoadMsg {
     id: u64,
     path: PathBuf,
     result: Result<DecodedPhoto, LoadError>,
+}
+
+struct PrefetchRequest {
+    generation: u64,
+    path: PathBuf,
 }
 
 struct PrefetchMsg {
@@ -64,14 +71,15 @@ pub struct ImageStore {
     full_px: (u32, u32),
     error: Option<String>,
     has_selection: bool,
-    pre_tx: Sender<PrefetchMsg>,
+    pre_request_tx: SyncSender<PrefetchRequest>,
     pre_rx: Receiver<PrefetchMsg>,
     prefetch: HashMap<PathBuf, DecodedPhoto>,
     prefetch_order: VecDeque<PathBuf>,
     prefetch_bytes: u64,
     prefetch_budget_bytes: u64,
-    inflight: HashSet<PathBuf>,
+    inflight: HashSet<(u64, PathBuf)>,
     prefetch_generation: u64,
+    prefetch_worker_generation: Arc<AtomicU64>,
 }
 
 impl ImageStore {
@@ -100,7 +108,52 @@ impl ImageStore {
             }
         });
 
-        let (pre_tx, pre_rx) = mpsc::channel();
+        let (pre_request_tx, pre_request_rx) =
+            mpsc::sync_channel::<PrefetchRequest>(PREFETCH_MAX_INFLIGHT);
+        let pre_request_rx = Arc::new(Mutex::new(pre_request_rx));
+        let (pre_result_tx, pre_rx) = mpsc::channel::<PrefetchMsg>();
+        let prefetch_worker_generation = Arc::new(AtomicU64::new(0));
+
+        for _ in 0..PREFETCH_MAX_INFLIGHT {
+            let request_rx = Arc::clone(&pre_request_rx);
+            let result_tx = pre_result_tx.clone();
+            let active_generation = Arc::clone(&prefetch_worker_generation);
+            std::thread::spawn(move || {
+                loop {
+                    let request = {
+                        let Ok(receiver) = request_rx.lock() else {
+                            break;
+                        };
+                        let Ok(request) = receiver.recv() else {
+                            break;
+                        };
+                        request
+                    };
+
+                    if request.generation != active_generation.load(Ordering::Acquire) {
+                        let _ = result_tx.send(PrefetchMsg {
+                            generation: request.generation,
+                            path: request.path,
+                            result: None,
+                        });
+                        continue;
+                    }
+
+                    let result = decode_photo(&request.path).ok();
+                    if result_tx
+                        .send(PrefetchMsg {
+                            generation: request.generation,
+                            path: request.path,
+                            result,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+        }
+
         Self {
             load_tx,
             rx: result_rx,
@@ -115,7 +168,7 @@ impl ImageStore {
             full_px: (0, 0),
             error: None,
             has_selection: false,
-            pre_tx,
+            pre_request_tx,
             pre_rx,
             prefetch: HashMap::new(),
             prefetch_order: VecDeque::new(),
@@ -123,6 +176,7 @@ impl ImageStore {
             prefetch_budget_bytes: 0,
             inflight: HashSet::new(),
             prefetch_generation: 0,
+            prefetch_worker_generation,
         }
     }
 
@@ -211,27 +265,38 @@ impl ImageStore {
                 continue;
             };
             let path = photos[index].path().to_path_buf();
-            if self.prefetch.contains_key(&path) || !self.inflight.insert(path.clone()) {
+            let already_running = self
+                .inflight
+                .iter()
+                .any(|(_, candidate)| candidate == &path);
+            let key = (generation, path.clone());
+            if self.prefetch.contains_key(&path)
+                || already_running
+                || !self.inflight.insert(key.clone())
+            {
                 continue;
             }
-            let tx = self.pre_tx.clone();
-            std::thread::spawn(move || {
-                let result = decode_photo(&path).ok();
-                let _ = tx.send(PrefetchMsg {
-                    generation,
-                    path,
-                    result,
-                });
-            });
+
+            match self
+                .pre_request_tx
+                .try_send(PrefetchRequest { generation, path })
+            {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+                    self.inflight.remove(&key);
+                    break;
+                }
+            }
         }
     }
 
     pub fn poll(&mut self, ctx: &egui::Context) -> bool {
         while let Ok(message) = self.pre_rx.try_recv() {
+            self.inflight
+                .remove(&(message.generation, message.path.clone()));
             if message.generation != self.prefetch_generation {
                 continue;
             }
-            self.inflight.remove(&message.path);
             if let Some(decoded) = message.result {
                 self.prefetch_bytes += decoded_bytes(&decoded);
                 self.prefetch_order.push_back(message.path.clone());
@@ -319,10 +384,14 @@ impl ImageStore {
 
     pub fn clear_prefetch(&mut self) {
         self.prefetch_generation = self.prefetch_generation.wrapping_add(1);
+        self.prefetch_worker_generation
+            .store(self.prefetch_generation, Ordering::Release);
         self.prefetch.clear();
         self.prefetch_order.clear();
         self.prefetch_bytes = 0;
-        self.inflight.clear();
+        // Do not clear `inflight`: stale workers still count against the global
+        // concurrency cap until they report completion. Their results are
+        // discarded by generation in `poll`.
     }
 }
 
