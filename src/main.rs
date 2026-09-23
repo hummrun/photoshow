@@ -8,7 +8,6 @@ mod app;
 mod atomic_file;
 mod config;
 mod editor;
-mod exif;
 mod fs_browser;
 mod icons;
 mod image_store;
