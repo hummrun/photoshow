@@ -89,8 +89,8 @@ impl ThumbCache {
         let (view_start, view_end) = viewport
             .map(|(start, end)| (start.min(visible.len()), end.min(visible.len())))
             .unwrap_or((0, 0));
-        let lo = view_start.saturating_sub(THUMB_MARGIN);
-        let hi_exclusive = view_end.saturating_add(THUMB_MARGIN).min(visible.len());
+        let (lo, hi_exclusive) =
+            expanded_viewport_range(visible.len(), view_start, view_end, THUMB_MARGIN);
 
         let mut candidate_indices: Vec<usize> = (lo..hi_exclusive).collect();
         if let Some(selected) = sel.filter(|selected| *selected < visible.len())
@@ -177,15 +177,20 @@ impl Default for ThumbCache {
     }
 }
 
-/// Índices da janela de thumbs (função pura, testável).
+/// Expande o viewport por uma margem, sempre limitado ao conjunto real.
 #[must_use]
-pub fn window_range(len: usize, center: usize, radius: usize) -> (usize, usize) {
-    if len == 0 {
-        return (0, 0);
-    }
-    let lo = center.saturating_sub(radius);
-    let hi = (center + radius).min(len - 1);
-    (lo, hi)
+pub fn expanded_viewport_range(
+    len: usize,
+    start: usize,
+    end: usize,
+    margin: usize,
+) -> (usize, usize) {
+    let start = start.min(len);
+    let end = end.max(start).min(len);
+    (
+        start.saturating_sub(margin),
+        end.saturating_add(margin).min(len),
+    )
 }
 
 #[cfg(test)]
@@ -193,10 +198,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn window_clamps_at_edges() {
-        assert_eq!(window_range(0, 0, 25), (0, 0));
-        assert_eq!(window_range(10, 0, 25), (0, 9));
-        assert_eq!(window_range(100, 50, 25), (25, 75));
-        assert_eq!(window_range(100, 95, 25), (70, 99));
+    fn viewport_margin_clamps_at_edges() {
+        assert_eq!(expanded_viewport_range(0, 0, 0, 32), (0, 0));
+        assert_eq!(expanded_viewport_range(10, 0, 3, 2), (0, 5));
+        assert_eq!(expanded_viewport_range(100, 40, 50, 5), (35, 55));
+        assert_eq!(expanded_viewport_range(100, 95, 100, 10), (85, 100));
     }
 }
