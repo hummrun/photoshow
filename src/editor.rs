@@ -238,34 +238,6 @@ pub fn bake(
     image::DynamicImage::ImageRgba8(image::imageops::crop_imm(&rotated, x, y, w, h).to_image())
 }
 
-/// Grava a imagem assada respeitando a qualidade JPEG configurada.
-/// Outras extensões usam o encoder padrão do crate `image`.
-pub fn save_baked(
-    img: &image::DynamicImage,
-    dest: &std::path::Path,
-    jpeg_quality: u8,
-) -> Result<(), String> {
-    let is_jpeg = dest
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg"))
-        .unwrap_or(false);
-    if is_jpeg {
-        use std::io::Write as _;
-        let file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
-        let mut buf = std::io::BufWriter::new(file);
-        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(
-            &mut buf,
-            jpeg_quality.clamp(1, 100),
-        );
-        enc.encode_image(img).map_err(|e| e.to_string())?;
-        buf.flush().map_err(|e| e.to_string())?;
-        Ok(())
-    } else {
-        img.save(dest).map_err(|e| e.to_string())
-    }
-}
-
 /// Grava primeiro em arquivo temporário no mesmo diretório e só então promove
 /// o resultado para o destino. O original nunca é truncado antes do encode
 /// terminar com sucesso.
@@ -275,7 +247,6 @@ fn save_baked_with_metadata(
     jpeg_quality: u8,
     metadata: &crate::metadata::EmbeddedMetadata,
 ) -> Result<crate::metadata::MetadataReport, String> {
-    use image::ImageEncoder as _;
     use std::io::Write as _;
 
     let extension = dest
