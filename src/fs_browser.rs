@@ -3,35 +3,61 @@
 //! Tipos de domínio (anti-primitivo): [`PhotoPath`] em vez de `String` solta.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 
 /// Extensões suportadas no MVP (minúsculas, sem ponto).
 pub const SUPPORTED_EXTENSIONS: &[&str] =
     &["jpg", "jpeg", "png", "webp", "tiff", "tif", "bmp", "gif"];
 
-/// Caminho de foto validado pela extensão.
+/// Dados imutáveis compartilhados por todas as views da mesma foto.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct PhotoPathData {
+    path: PathBuf,
+    display_name: String,
+    sort_key: String,
+}
+
+/// Handle barato e validado de uma foto.
+///
+/// Clonar este tipo clona apenas o `Arc`; `photos` e `visible` não duplicam
+/// buffers de caminho/nome para coleções grandes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PhotoPath(PathBuf);
+pub struct PhotoPath(Arc<PhotoPathData>);
 
 impl PhotoPath {
     /// Constrói a partir de qualquer caminho; aceita só extensões suportadas.
     pub fn new(path: PathBuf) -> Option<Self> {
-        has_supported_extension(&path).then_some(Self(path))
+        if !has_supported_extension(&path) {
+            return None;
+        }
+        let display_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        let sort_key = display_name.to_lowercase();
+        Some(Self(Arc::new(PhotoPathData {
+            path,
+            display_name,
+            sort_key,
+        })))
     }
 
     /// Caminho interno.
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.0
+        &self.0.path
     }
 
-    /// Nome do arquivo para exibição (fallback: caminho completo).
+    /// Nome do arquivo para exibição.
     #[must_use]
     pub fn display_name(&self) -> String {
-        self.0
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.0.to_string_lossy().into_owned())
+        self.0.display_name.clone()
+    }
+
+    /// Chave case-insensitive pré-computada usada para ordenação.
+    #[must_use]
+    pub fn sort_key(&self) -> &str {
+        &self.0.sort_key
     }
 }
 
@@ -135,7 +161,7 @@ fn walk_photos(dir: &Path, opts: ScanOptions) -> (Vec<PhotoPath>, u64, u64, Vec<
         }
     }
 
-    photos.sort_by_cached_key(|photo| photo.display_name().to_lowercase());
+    photos.sort_by(|left, right| left.sort_key().cmp(right.sort_key()));
     (photos, files_seen, errors_seen, sample_errors)
 }
 
