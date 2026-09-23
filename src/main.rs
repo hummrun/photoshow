@@ -1,10 +1,11 @@
 //! photoshow: visualizador de fotos rápido com egui.
 //!
 //! M1: janela eframe 0.36 + abrir pasta/arquivos via rfd + lista lateral.
-//! Fases seguintes: render da imagem (image_store), EXIF, thumbs (taffy),
+//! Fases seguintes: render da imagem (image_store), EXIF e thumbnails,
 //! edição não-destrutiva rotate/crop (editor).
 
 mod app;
+mod atomic_file;
 mod config;
 mod editor;
 mod exif;
