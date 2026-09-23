@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-09-23T00:00:00Z",
+  "updated_at": "2026-09-23T06:20:00Z",
   "summary": {
     "tasks": 0,
     "input_tokens": 0,
@@ -8,13 +8,32 @@
     "cached_tokens": 0,
     "direct_cost": 0
   },
-  "tasks": [],
+  "tasks": [
+    {
+      "id": "P01-hardening-code",
+      "status": "completed",
+      "evidence": {
+        "commit": "c4648d43c3888a55723ef610d6233ecd8ff719c3",
+        "ci_run": 35825313218,
+        "linux": "success",
+        "windows": "success",
+        "msrv_1_95": "success",
+        "prumo_0_6": "success"
+      }
+    }
+  ],
   "debt": [
     {
       "id": "photoshow-hardening-001",
-      "kind": "architecture",
+      "kind": "performance-evidence",
       "status": "active",
-      "summary": "Complete P01 reliability/performance hardening and capture reproducible performance evidence."
+      "summary": "Capture reproducible scan, startup/RSS, viewer and gallery performance evidence before closing P01."
+    },
+    {
+      "id": "photoshow-release-001",
+      "kind": "release-verification",
+      "status": "active",
+      "summary": "Exercise the hardened release workflow from a real prerelease tag and verify remote checksum installation."
     }
   ]
 }

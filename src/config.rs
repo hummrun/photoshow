@@ -196,6 +196,34 @@ mod tests {
     }
 
     #[test]
+    fn legacy_config_missing_new_fields_uses_compatible_defaults() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let favorite = dir.path().join("legacy-favorite");
+        std::fs::create_dir(&favorite).expect("mkdir favorite");
+        let path = dir.path().join("config.json");
+        let json = serde_json::json!({
+            "favorites": [favorite],
+            "jpeg_quality": 73,
+            "confirm_overwrite": false
+        });
+        std::fs::write(&path, serde_json::to_vec_pretty(&json).expect("json"))
+            .expect("write legacy config");
+
+        let loaded = AppConfig::load_from(&path).expect("load legacy config");
+
+        assert_eq!(loaded.version, 1);
+        assert_eq!(loaded.jpeg_quality, 73);
+        assert!(!loaded.confirm_overwrite);
+        assert!(loaded.show_filmstrip);
+        assert!(loaded.open_last_on_startup);
+        assert!(loaded.respect_gitignore);
+        assert!(loaded.skip_hidden);
+        assert_eq!(loaded.prefetch_max_mb, 64);
+        assert_eq!(loaded.theme, "slate");
+        assert_eq!(loaded.thumb_size, 88.0);
+    }
+
+    #[test]
     fn corrupt_file_falls_back_to_none() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("config.json");

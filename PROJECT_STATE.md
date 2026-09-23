@@ -5,7 +5,7 @@
 - Current phase: **P01 — Reliability, Performance & Architecture Hardening**
 - Active branch: **refactor/prumo-performance-hardening**
 - UI toolkit: **egui/eframe — retained**
-- Status: **in progress**
+- Status: **hardening code gates green; performance evidence and release-tag smoke remain**
 - Context methodology: **Lean Progressive Context**
 
 ## Current verified direction
@@ -26,6 +26,23 @@
 - PS-W3 — UI/app decomposition and real virtualization.
 - PS-W4 — UI contracts/accessibility.
 - PS-W5 — release hardening.
+
+## Verified baseline
+
+Snapshot `c4648d43` passed, on the same commit:
+
+- Linux: `cargo fmt --check`, strict Clippy, all tests, release build.
+- Windows: strict Clippy, all tests, release build.
+- MSRV Rust 1.95: `cargo check --all-targets --all-features --locked`.
+- Prumo 0.6: project validation, doctor and declared UI-map validation.
+
+Every later snapshot must pass the same gates before merge.
+
+## Remaining P01 evidence
+
+- Run and record the 1k/10k/50k folder-scan performance harness.
+- Capture startup/idle RSS and real viewer/gallery frame-time on representative hardware.
+- Exercise the release workflow from an actual prerelease tag, including installer + checksum download.
 
 ## Completion rule
 
