@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::config::{AppConfig, THEMES};
-use crate::editor::{CropRect, EditorStack, bake, save_baked};
+use crate::editor::{CropRect, EditorStack, bake, save_baked_atomic};
 use crate::fs_browser::{self, PhotoPath, ScanOptions, ScanResult};
 use crate::icons::{self, labeled};
 use crate::image_store::{ImageStore, LoadState};
@@ -815,7 +815,7 @@ impl PhotoShowApp {
         self.status = String::from("Salvando…");
         std::thread::spawn(move || {
             let baked = bake(&full, base, &state);
-            let msg = match save_baked(&baked, &dest, quality) {
+            let msg = match save_baked_atomic(&baked, &dest, quality) {
                 Ok(()) => SaveMsg {
                     note: format!("Salvo em {}", dest.display()),
                     reload: overwrite.then_some(dest),
