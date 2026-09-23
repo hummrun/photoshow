@@ -307,5 +307,4 @@ impl PhotoShowApp {
             ImgAction::Rename => self.open_rename(),
         }
     }
-
 }
