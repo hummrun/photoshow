@@ -7,7 +7,7 @@ use std::path::Path;
 
 use thiserror::Error;
 
-use crate::exif::{apply_orientation, read_orientation};
+use image::ImageDecoder as _;
 
 pub const DISPLAY_MAX_DIM: u32 = 2048;
 
@@ -32,9 +32,15 @@ pub struct DecodedPhoto {
 }
 
 pub fn decode_full_photo(path: &Path) -> Result<image::DynamicImage, LoadError> {
-    let reader = image::ImageReader::open(path).map_err(|error| LoadError::Io(error.to_string()))?;
-    let raw = reader.decode()?;
-    Ok(apply_orientation(raw, read_orientation(path)))
+    let reader =
+        image::ImageReader::open(path).map_err(|error| LoadError::Io(error.to_string()))?;
+    let mut decoder = reader.into_decoder()?;
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut image = image::DynamicImage::from_decoder(decoder)?;
+    image.apply_orientation(orientation);
+    Ok(image)
 }
 
 pub fn decode_photo(path: &Path) -> Result<DecodedPhoto, LoadError> {
