@@ -120,11 +120,6 @@ impl ScanController {
     }
 }
 
-/// Convenience scanner for isolated callers/tests. Application code should keep
-/// one ScanController so newer requests can cancel older walks.
-pub fn scan_dir_async(dir: PathBuf, opts: ScanOptions, id: u64) -> mpsc::Receiver<ScanResult> {
-    ScanController::new().scan(dir, opts, id)
-}
 
 /// Opções da varredura (espelham as preferências do menu ⚙).
 #[derive(Debug, Clone, Copy)]
@@ -298,7 +293,7 @@ mod tests {
         for name in ["b.png", "a.JPG", "nota.txt", "c.gif"] {
             fs::write(dir.path().join(name), b"x").expect("write");
         }
-        let res = recv_scan(scan_dir_async(dir.path().to_path_buf(), scan_opts(), 7));
+        let res = recv_scan(ScanController::new().scan(dir.path().to_path_buf(), scan_opts(), 7));
         assert_eq!(res.id, 7);
         assert_eq!(res.files_seen, 4);
         let names: Vec<_> = res.photos.iter().map(|p| p.display_name()).collect();
@@ -308,7 +303,7 @@ mod tests {
     #[test]
     fn scan_async_empty_dir_returns_empty_vec() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let res = recv_scan(scan_dir_async(dir.path().to_path_buf(), scan_opts(), 1));
+        let res = recv_scan(ScanController::new().scan(dir.path().to_path_buf(), scan_opts(), 1));
         assert!(res.photos.is_empty());
     }
 
@@ -323,7 +318,7 @@ mod tests {
         fs::create_dir(sub.join(".hidden")).expect("mkdir");
         fs::write(sub.join(".hidden").join("c.jpg"), b"x").expect("write");
 
-        let res = recv_scan(scan_dir_async(dir.path().to_path_buf(), scan_opts(), 1));
+        let res = recv_scan(ScanController::new().scan(dir.path().to_path_buf(), scan_opts(), 1));
         let names: Vec<_> = res.photos.iter().map(|p| p.display_name()).collect();
         assert_eq!(names, vec!["b.jpg"]);
 
@@ -331,7 +326,7 @@ mod tests {
             respect_gitignore: false,
             skip_hidden: false,
         };
-        let res = recv_scan(scan_dir_async(dir.path().to_path_buf(), no_opts, 2));
+        let res = recv_scan(ScanController::new().scan(dir.path().to_path_buf(), no_opts, 2));
         let names: Vec<_> = res.photos.iter().map(|p| p.display_name()).collect();
         assert_eq!(names, vec!["a.png", "b.jpg", "c.jpg"]);
     }
@@ -346,7 +341,7 @@ mod tests {
             respect_gitignore: false,
             skip_hidden: false,
         };
-        let res = recv_scan(scan_dir_async(dir.path().to_path_buf(), no_opts, 1));
+        let res = recv_scan(ScanController::new().scan(dir.path().to_path_buf(), no_opts, 1));
         assert!(res.photos.is_empty());
     }
 
