@@ -1,156 +1,215 @@
-# photoshow — Roadmap até 2.0
+# PhotoShow — Roadmap até 2.0
 
-> **Visão:** visualizador ultrarrápido com organização prática e edição leve.
-> **Anti-visão:** nunca virar GIMP/Lightroom — cada milestone entrega fluxos
-> completos, nunca meio-recurso, nunca bloat.
+> **Visão:** visualizador nativo ultrarrápido com organização prática e edição leve.
+> **Anti-visão:** não virar Lightroom/GIMP/DAM. Cada recurso precisa justificar seu
+> custo de memória, CPU, dependências e complexidade de interface.
 
-Estado atual: `0.1.0-rc1` (navegação, filmstrip/galeria, rotate/crop
-não-destrutivo, EXIF, favoritas, temas, dock redimensionável).
+Estado de produto: `0.1.0-rc1`.
 
----
-
-## 0.1.0 — Estabilização da rc1 (definitiva)
-
-Foco: transformar a rc1 em software confiável e distribuível. Nada de
-recurso novo grande.
-
-### Persistência e estado
-- [ ] Persistir layout do dock (posição/tamanho dos painéis) no config
-      (`egui_dock` tem feature `serde`; salvar em `~/.config/photoshow/`)
-- [ ] Galeria acompanha a seleção: rolar até o thumb ativo ao navegar
-      por setas/clique na lista
-- [ ] Migração tolerante de config antiga (campos novos com default)
-
-### Fidelidade de arquivo
-- [ ] Preservar metadata EXIF no save (hoje o `bake()` descarta tudo;
-      copiar tags essenciais ou reanexar via `kamadak-exif`/`little-exif`)
-- [ ] Decidir `Delete` → lixeira: entra na 0.1.0 (via `trash` crate) ou
-      fica para 0.2? (proposta: entra — é esperado em qualquer viewer)
-
-### Empacotamento e repo público
-- [ ] `LICENSE-MIT` + `LICENSE-APACHE` (padrão do ecossistema egui)
-- [ ] `README.md` com screenshot, recursos, build e atalhos
-- [ ] `CHANGELOG.md` (formato Keep a Changelog)
-- [ ] `.desktop` + ícone para Linux
-- [ ] Release 0.1.0 no GitHub com binário anexado
-- [ ] `cargo install --path .` verificado do zero (deps do sistema documentadas)
-
-### Validação
-- [ ] QA manual em pastas gigantes reais (cenário do batch de performance)
-- [ ] Smoke em X11 além de Wayland
-- [ ] Auditoria de atalhos: listar todos numa janela de ajuda (`F1` ou `?`)
-
-**Critério de saída:** instalar do zero → abrir pasta de 50k arquivos →
-navegar, editar, salvar — sem freeze, sem erro vermelho, sem perda de metadata.
+Estado de engenharia: **P01 — Reliability, Performance & Architecture Hardening**.
+Nenhuma feature grande deve furar os gates desta fase.
 
 ---
 
-## 0.2 — Organização
+## P01 — hardening obrigatório antes de novas features
 
-- [ ] Nota/favorito por foto (1–5 estrelas), persistido em sidecar JSON
-      ao lado do arquivo (nunca banco escondido, nunca toca no original)
-- [ ] Ordenação: nome, data, tamanho
-- [ ] Busca por nome (filtro incremental na barra)
-- [ ] Painel de metadados EXIF (dimensões, câmera, exposição, ISO, data)
+### Confiabilidade e integridade
 
-## 0.3 — Apresentação
+- [x] CI contínuo em Linux e Windows: fmt, Clippy `-D warnings`, testes e release build
+- [x] MSRV 1.95 verificado em CI
+- [x] persistência da configuração por replace seguro
+- [x] save da imagem por arquivo temporário no mesmo filesystem + promoção/rollback
+- [x] installer com validação estrutural do pacote
+- [x] checksums SHA-256 nas releases
+- [x] smoke test do tarball/installer antes de publicação
+- [x] metadata de save deixou de ser silenciosa: EXIF/ICC são preservados quando seguro/suportado e omissões são informadas
+- [ ] teste de falha de encode imediatamente antes da promoção final
+- [ ] smoke real do workflow de release em tag de pré-release
 
-- [ ] Slideshow com temporizador configurável e transições simples
-      (fade/corte; nada de motor de efeitos)
-- [ ] Modo apresentação: UI mínima, `Esc`/`F11` sai
+### Performance e memória
 
-## 0.4 — Edição básica real (ainda não-destrutiva)
+- [x] full-resolution deixou de permanecer residente no viewer
+- [x] full-resolution é decodificada sob demanda para save/copy
+- [x] loader principal `latest-wins` em vez de uma thread nova por seleção
+- [x] prefetch usa orçamento por bytes decodificados, não pelo tamanho comprimido
+- [x] prefetch rejeita resultados de gerações/pastas obsoletas
+- [x] buffer RGBA de upload é temporário; não existe segunda cópia CPU permanente
+- [x] filmstrip virtualizado pelas linhas realmente visíveis
+- [x] scheduler de thumbnails segue o viewport
+- [x] fila de thumbnails é limitada e rejeita trabalho de pasta obsoleta antes do decode
+- [x] scan reporta erros de IO/permissão em vez de descartá-los silenciosamente
+- [x] sort do scan usa chave normalizada cacheada
+- [ ] registrar baseline reproduzível de startup/RSS/50k/latência conforme `docs/quality/performance-baseline.md`
+- [ ] comparar WGPU × Glow em hardware moderno e low-end antes de decidir qualquer mudança de renderer
 
-Tudo global, tudo na `EditorState` existente (stack + undo/redo + preview):
+### Arquitetura / Prumo
 
-- [ ] Exposição (EV), contraste, saturação, temperatura/tint (para JPEG:
-      aproximação via balanço de canais)
-- [ ] Histograma RGB + overlay de clipping (estourados/sombras)
-- [ ] Comparador lado a lado / split (original × editado, arrastável)
-- [ ] `bake()` estendido cobre os novos ops (preview e save usam o mesmo código)
+- [x] `project-profile.json` migrado
+- [x] `prumo.json`, `ENTRYPOINT.md`, `PROJECT_STATE.md` e `docs/PRUMO.md`
+- [x] workforce/manifests resolvidos pelo catálogo Prumo atual
+- [x] arquitetura canônica e estratégia de testes
+- [x] interface map + state matrix
+- [x] `platform.rs` separa integração com SO
+- [x] tema separado em `ui/theme.rs`
+- [x] browser/viewer/filmstrip extraídos do monólito `app.rs`
+- [ ] separar decode/media neutros de `image_store` (adapter egui)
+- [ ] reduzir o estado central restante sem criar abstrações artificiais
+- [ ] reconciliar/regenerar integralmente skills importadas antigas quando o Prumo expuser o fluxo adequado
+- [ ] baseline de acessibilidade por teclado/foco nos fluxos críticos
 
-## 0.5 — Lote
+### Gate de saída P01
 
-- [ ] Fila de operações em lote: rotacionar, converter formato,
-      redimensionar, renomear com padrão (`viagem_###.jpg`)
-- [ ] Progresso com cancelamento, em thread (nunca trava a UI)
-- [ ] Relatório final (ok/falhas por arquivo)
+Para sair desta fase, todos devem ser verdadeiros:
 
-## 1.0 — Polimento e distribuição
-
-- [ ] Flatpak e/ou AppImage
-- [ ] Testes de integração nos fluxos críticos (abrir→editar→salvar)
-- [ ] Docs de usuário (atalhos, formatos, FAQ de performance)
-- [ ] Auditoria de performance final (pastas gigantes + TIFFs de 200MB+)
-- [ ] Congelar escopo: tudo que não coube vira proposta para 2.x
-
-**Critério de saída da 1.0:** organizador + editor leve completo para
-JPEG/PNG/WebP/TIFF, instalável em 1 comando, sem dependência de terminal.
-
----
-
-## 2.0 (conjectura) — Editor RAW enxuto, sem virar Lightroom
-
-> Princípio: RAW é um **modo a mais do viewer**, não um produto novo.
-> O binário padrão continua sem ele (feature flag), e o ajuste máximo
-> é global — sem máscaras, sem IA, sem banco de lentes.
-
-### Por que dá para ser leve
-
-1. **Preview embutido primeiro:** todo RAW traz um JPEG embutido. A
-   navegação/galeria/thumbs usam ele — custo zero, velocidade igual à de JPEG.
-2. **Decode total só sob demanda:** só a foto selecionada (e só ao entrar
-   em modo RAW) passa pelo pipeline completo, em thread, com cache de 1.
-3. **Feature flag `raw`:** `rawloader` (Rust puro, sem LibRaw/C) entra só com
-   `--features raw`. O build padrão continua magro.
-4. **Sem DB de lentes/câmeras pesado:** sem `lensfun`, sem perfis DCP —
-   matriz de cor vem do próprio arquivo (`rawloader` expõe) + fallback sRGB.
-
-### Pipeline proposto (`src/raw/`, ~4 ajustes, todos puros e testáveis)
-
-```
-CFA ──► demosaic bilinear c/ equilíbrio de verde ──► linear RGB
-  ──► balanço de branco (multiplicadores do metadata + picker cinza)
-  ──► exposição (EV) + recuperação de highlights (clip guiado)
-  ──► nível de preto ──► tone-map fílmico simples ──► sRGB ──► textura
-```
-
-- Demosaic próprio (~200 linhas, testável em CFA sintético) em vez de
-  puxar crate pesado; qualidade "boa", não "estado da arte" — documentado.
-- Cada etapa é função pura `&[f32] -> Vec<f32>`: teste unitário barato,
-  preview e bake compartilham o código (igual ao `bake()` atual).
-- Reuso total da infra existente: threads de decode, `EditorState`
-  estendido (`ev`, `wb_temp`, `wb_tint`, `highlights`), histograma e
-  clipping da 0.4, save em thread.
-
-### Conjunto fechado de ajustes (não cresce)
-
-Exposição, temperatura/tint, highlights, sombras, contraste, saturação,
-curva de tons simples, crop/rotate (os atuais). Ponto.
-
-### Formatos (limitados ao que `rawloader` cobre bem)
-
-NEF, CR2, ARW, RAF, RW2, DNG. **Fora:** CR3 comprimido total (limitação
-conhecida do `rawloader` — documentar, não prometer).
-
-### Orçamento de performance (regras duras)
-
-- Abrir pasta com RAWs: tão rápido quanto JPEG (só previews embutidos)
-- Thumb RAW: usa preview embutido, nunca decode total
-- Decode total: só foto atual, só em modo RAW, cancelável ao navegar
-- Binário padrão sem `raw`: zero bytes a mais
-
-### Explicitamente FORA (para não virar bloat)
-
-Correção de lente por banco de dados, denoise com IA, ajustes locais/
-máscaras, catálogo com banco de dados, importação com presets, edição
-de vídeo, integração com nuvem, plugins.
+1. CI Rust verde em Linux e Windows.
+2. `prumo validate` e `prumo doctor` verdes.
+3. Interface map declarado válido; derivação de símbolos Rust fica explicitamente desativada enquanto o Prumo só tiver `GoSymbolDeriver`.
+4. overwrite não destrói o original em falha.
+5. pasta grande não materializa O(n) widgets por frame.
+6. filas de decode são limitadas/descartam trabalho obsoleto.
+7. existe pelo menos um relatório de performance reproduzível.
+8. instalação a partir do artefato da release passa em smoke test.
 
 ---
 
-## Como acompanhar
+## 0.1.0 — estabilização final da rc1
 
-- `0.1.0`: issues com checklist acima, marco `v0.1.0` no GitHub
-- `0.2`–`1.0`: uma issue de design curta por milestone antes de codar
-- `2.0`: tudo aqui é conjectura — revalidar `rawloader` e escopo antes
-  de qualquer linha de código
+Depois do P01, fechar somente o que melhora a experiência existente:
+
+- [ ] persistir layout do dock
+- [ ] galeria rolar até o thumbnail selecionado quando a navegação veio de fora dela
+- [ ] migração/versionamento explícito do arquivo de configuração
+- [ ] janela compacta de atalhos (`F1` ou `?`)
+- [ ] QA X11 + Wayland + Windows
+- [ ] verificar `cargo install --path .` do zero
+- [ ] liberar `v0.1.0`
+
+**Critério de saída:** instalar → abrir uma pasta grande → navegar → rotate/crop →
+salvar/salvar como → reiniciar, sem freeze, corrupção ou estado incoerente.
+
+---
+
+## 0.2 — encontrar e entender fotos
+
+A ordem é deliberada: primeiro recursos **read-only**, baratos e fáceis de
+validar; persistência por foto só entra quando a navegação está estável.
+
+### 0.2.1 — ordenação
+
+- [ ] nome A–Z / Z–A
+- [ ] data de modificação
+- [ ] tamanho
+- [ ] preservar seleção ao trocar sort
+- [ ] ordenar índices/metadados, não duplicar pixel data
+
+### 0.2.2 — busca
+
+- [ ] filtro incremental por nome
+- [ ] debounce apenas se as medições mostrarem necessidade
+- [ ] busca combinável com filtro de formato
+- [ ] estado vazio explícito: pasta vazia ≠ nenhum resultado da busca
+
+### 0.2.3 — painel de metadata
+
+- [ ] dimensões
+- [ ] formato/tamanho do arquivo
+- [ ] data
+- [ ] câmera/lente quando existente
+- [ ] exposição, abertura, ISO e focal quando existente
+- [ ] separar “ausente” de “erro ao ler”
+
+### 0.2.4 — rating/favorito por foto
+
+- [ ] 1–5 estrelas + favorito
+- [ ] definir sidecar estável/versionado antes da implementação
+- [ ] escrita atômica do sidecar
+- [ ] nunca alterar o arquivo original apenas para registrar rating
+- [ ] estratégia clara para rename/move do arquivo
+
+---
+
+## 0.3 — apresentação
+
+- [ ] slideshow com temporizador configurável
+- [ ] transições limitadas a corte/fade
+- [ ] pré-carregamento usa o mesmo orçamento do viewer
+- [ ] modo apresentação com UI mínima e saída por `Esc`/`F11`
+
+---
+
+## 0.4 — edição básica não-destrutiva
+
+Estender o `EditorState`; preview e bake final precisam compartilhar semântica.
+
+- [ ] exposição
+- [ ] contraste
+- [ ] saturação
+- [ ] temperatura/tint
+- [ ] histograma RGB
+- [ ] clipping de highlights/shadows
+- [ ] comparação original × editado
+- [ ] processamento de preview fora do frame da UI se a medição indicar jank
+
+**Invariante:** nenhum ajuste vira ferramenta local, máscara ou sistema de layers.
+
+---
+
+## 0.5 — lote
+
+- [ ] fila limitada de operações
+- [ ] rotate
+- [ ] conversão
+- [ ] resize
+- [ ] rename por padrão
+- [ ] progresso + cancelamento cooperativo
+- [ ] relatório por arquivo
+- [ ] limite explícito de concorrência/memória
+
+---
+
+## 1.0 — polimento e distribuição
+
+- [ ] Flatpak e/ou AppImage conforme demanda real
+- [ ] testes de integração dos fluxos abrir → editar → salvar
+- [ ] documentação final de atalhos, formatos e performance
+- [ ] auditoria de pasta 50k + TIFF 200 MB+
+- [ ] budgets de regressão promovidos a partir dos baselines medidos
+- [ ] congelar escopo 1.x
+
+**Critério de saída:** viewer/organizador/editor leve confiável para
+JPEG/PNG/WebP/TIFF, instalável sem ambiente de desenvolvimento.
+
+---
+
+## 2.0 — RAW opcional, condicionado a nova pesquisa
+
+RAW continua sendo hipótese de produto, não compromisso da 1.x.
+
+### Princípios
+
+- preview embutido primeiro
+- full RAW somente para a foto ativa
+- pipeline cancelável e com concorrência limitada
+- feature opcional; build padrão não paga o custo
+- sem catálogo, cloud, IA, máscaras ou banco pesado de lentes
+
+Antes de qualquer implementação deve ser reavaliado o ecossistema Rust de RAW
+existente na época; o roadmap não fixa hoje `rawloader` ou outro decoder como
+decisão arquitetural eterna.
+
+---
+
+## Regras para aceitar uma nova feature
+
+Uma feature só entra quando responde claramente:
+
+1. Qual problema de viewer/organização/edição leve ela resolve?
+2. Qual o custo de memória/CPU/startup/binário?
+3. Ela exige estado persistente novo?
+4. Qual é o comportamento de erro/cancelamento?
+5. Quais contratos/UI states mudam?
+6. Como será testada?
+7. Qual evidência prova que não degradou pasta grande e hardware modesto?
+
+Se essas respostas exigirem transformar o PhotoShow em DAM/editor pesado, a
+feature está fora da visão do produto.
