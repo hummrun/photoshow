@@ -763,11 +763,7 @@ impl PhotoShowApp {
                     let baked = bake(&full, base, &state);
                     match save_baked_atomic(&baked, &source, &dest, quality) {
                         Ok(report) => SaveMsg {
-                            note: format!(
-                                "Salvo em {}{}",
-                                dest.display(),
-                                report.status_suffix()
-                            ),
+                            note: format!("Salvo em {}{}", dest.display(), report.status_suffix()),
                             reload: overwrite.then_some(dest),
                         },
                         Err(error) => SaveMsg {
