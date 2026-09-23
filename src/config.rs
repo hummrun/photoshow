@@ -171,16 +171,18 @@ mod tests {
     fn roundtrip_preserves_values() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("config.json");
+        let favorite = dir.path().join("favorita");
+        std::fs::create_dir(&favorite).expect("mkdir favorite");
+
         let mut cfg = AppConfig::default();
-        cfg.favorites.push(PathBuf::from("/tmp"));
+        cfg.favorites.push(favorite.clone());
         cfg.jpeg_quality = 77;
         cfg.confirm_overwrite = false;
         cfg.save_to(&path).expect("save");
         let back = AppConfig::load_from(&path).expect("load");
         assert_eq!(back.jpeg_quality, 77);
         assert!(!back.confirm_overwrite);
-        // "/tmp" existe, então sobrevive ao retain.
-        assert_eq!(back.favorites, vec![PathBuf::from("/tmp")]);
+        assert_eq!(back.favorites, vec![favorite]);
     }
 
     #[test]
