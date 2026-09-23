@@ -9,16 +9,18 @@ Valeu pelo interesse! O projeto é pequeno de propósito — leia o
 Requer Rust 1.95+.
 
 ```bash
-cargo test          # 28 testes (devem passar todos)
-cargo fmt --all     # formatação obrigatória
-cargo clippy --all-targets   # zero warnings
-cargo run           # roda em modo debug
+cargo fmt --all --check
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-features --locked
+cargo build --release --locked
+cargo run
 ```
 
 ## Regras do código
 
 - Tipos de domínio em vez de primitivos soltos (`PhotoPath`, não `String`)
-- Erros recuperáveis via `Result` — sem `unwrap` em caminho de usuário
+- Erros recuperáveis via `Result` — sem `unwrap`/`expect` em caminho de usuário
+- `unsafe` é proibido no crate; exceções exigem decisão arquitetural explícita
 - Decode/save pesado sempre em thread, nunca na thread da UI
 - Preview e save compartilham o mesmo código (`bake()`)
 - Testes para lógica pura (orientação, crop, bake, scan, config)

@@ -1,93 +1,32 @@
-//! Cache de imagens: decode em background -> texturas egui.
+//! Image runtime: bounded decode workers, display cache and egui texture adapter.
 //!
-//! Fluxo: `select()` dispara uma thread que decodifica (com correção EXIF)
-//! e reduz para display (max [`DISPLAY_MAX_DIM`] px); o resultado volta por
-//! `mpsc` com id de geração — obsoletos são descartados. `poll()` cria a
-//! `TextureHandle` e pede repaint enquanto há carga pendente.
-//!
-//! extras Fase 3/4:
-//! - `ensure_prefetched()`: decodifica vizinhos (±2) em background; `select()`
-//!   consome o cache e vira instantâneo (cap 4, path-keyed).
-//! - `rebuild_preview()` / `restore_base()`: aplica o [`EditorState`] na
-//!   imagem de display e troca a textura (preview de rotate/crop).
+//! Full-resolution pixels are never retained in the viewer cache. The cache keeps
+//! only display-sized CPU images; RGBA upload buffers are transient and dropped
+//! immediately after the texture is created.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
-
-use thiserror::Error;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::editor::EditorState;
-use crate::exif::{apply_orientation, read_orientation};
+use crate::media::decoder::{DecodedPhoto, LoadError, decode_photo};
+use crate::media::pixels::RgbaFrame;
 
-/// Maior lado (px) da versão de display. Full-res fica em `full`.
-pub const DISPLAY_MAX_DIM: u32 = 2048;
-/// Vizinhos pré-decodificados para cada lado + tamanho do cache.
 const PREFETCH_RADIUS: isize = 2;
 const PREFETCH_CAP: usize = 4;
-/// Teto de RAM do prefetch (full-res de arquivos grandes pesa GBs).
-const PREFETCH_BYTES_CAP: u64 = 512 * 1024 * 1024;
+const PREFETCH_MAX_INFLIGHT: usize = 2;
+const LOAD_POLL_INTERVAL: Duration = Duration::from_millis(16);
 
-/// Estima a RAM de uma foto decodificada (RGBA, full + display).
-fn decoded_bytes(dec: &DecodedPhoto) -> u64 {
-    let full = dec.full.width() as u64 * dec.full.height() as u64 * 4;
-    let disp = dec.display.width() as u64 * dec.display.height() as u64 * 4;
-    full + disp
+fn decoded_bytes(decoded: &DecodedPhoto) -> u64 {
+    decoded.display.as_bytes().len() as u64
 }
 
-/// Erros de carregamento de foto.
-#[derive(Debug, Error)]
-pub enum LoadError {
-    /// Falha de IO ao ler o arquivo.
-    #[error("io: {0}")]
-    Io(String),
-    /// Falha ao decodificar (formato/arquivo corrompido).
-    #[error("decode: {0}")]
-    Decode(String),
-}
-
-impl From<image::ImageError> for LoadError {
-    fn from(e: image::ImageError) -> Self {
-        Self::Decode(e.to_string())
-    }
-}
-
-/// Foto decodificada: full-res corrigida + versão de display (orientada).
-#[derive(Debug)]
-pub struct DecodedPhoto {
-    /// Imagem original corrigida (para bake da Fase 4).
-    pub full: image::DynamicImage,
-    /// Versão reduzida orientada (para display e preview do editor).
-    pub display: image::DynamicImage,
-    /// Dimensões (w, h) da full-res.
-    pub full_size: (u32, u32),
-}
-
-/// Decodifica + corrige EXIF + reduz. Função pura para facilitar teste.
-pub fn decode_photo(path: &Path) -> Result<DecodedPhoto, LoadError> {
-    let reader = image::ImageReader::open(path).map_err(|e| LoadError::Io(e.to_string()))?;
-    let raw = reader.decode()?;
-    let full = apply_orientation(raw, read_orientation(path));
-    let full_size = (full.width(), full.height());
-    let display = if full.width().max(full.height()) > DISPLAY_MAX_DIM {
-        full.thumbnail(DISPLAY_MAX_DIM, DISPLAY_MAX_DIM)
-    } else {
-        full.clone()
-    };
-    Ok(DecodedPhoto {
-        full,
-        display,
-        full_size,
-    })
-}
-
-/// Converte para upload em GPU.
-fn to_color(img: &image::DynamicImage) -> egui::ColorImage {
-    let rgba = img.to_rgba8();
-    egui::ColorImage::from_rgba_unmultiplied(
-        [rgba.width() as usize, rgba.height() as usize],
-        rgba.as_raw(),
-    )
+struct LoadRequest {
+    id: u64,
+    path: PathBuf,
 }
 
 struct LoadMsg {
@@ -96,255 +35,346 @@ struct LoadMsg {
     result: Result<DecodedPhoto, LoadError>,
 }
 
+struct PrefetchRequest {
+    generation: u64,
+    path: PathBuf,
+}
+
 struct PrefetchMsg {
+    generation: u64,
     path: PathBuf,
     result: Option<DecodedPhoto>,
 }
 
-/// Estado visível do carregamento atual.
 pub enum LoadState {
-    /// Nada selecionado.
     Empty,
-    /// Decodificando em background.
     Loading,
-    /// Pronta para exibir.
     Loaded {
-        /// Textura atual (base ou preview do editor).
         texture: egui::TextureHandle,
-        /// Tamanho em px da imagem exibida (pós-rotate do editor).
         display_px: egui::Vec2,
-        /// Tamanho em px da full-res.
         full_px: (u32, u32),
     },
-    /// Falha (msg para status bar).
     Failed(String),
 }
 
-/// Guarda seleção atual + textura; `display_img` alimenta o editor.
 pub struct ImageStore {
-    tx: Sender<LoadMsg>,
+    load_tx: Sender<LoadRequest>,
     rx: Receiver<LoadMsg>,
     next_id: u64,
     tex_seq: u64,
     current_id: u64,
     texture: Option<egui::TextureHandle>,
+    base_texture: Option<egui::TextureHandle>,
     display_px: egui::Vec2,
+    base_display_px: egui::Vec2,
     display_img: Option<image::DynamicImage>,
-    full: Option<image::DynamicImage>,
     full_px: (u32, u32),
     error: Option<String>,
     has_selection: bool,
-    // Prefetch de vizinhos.
-    pre_tx: Sender<PrefetchMsg>,
+    pre_request_tx: SyncSender<PrefetchRequest>,
     pre_rx: Receiver<PrefetchMsg>,
     prefetch: HashMap<PathBuf, DecodedPhoto>,
     prefetch_order: VecDeque<PathBuf>,
     prefetch_bytes: u64,
-    inflight: HashSet<PathBuf>,
+    prefetch_budget_bytes: u64,
+    inflight: HashSet<(u64, PathBuf)>,
+    prefetch_generation: u64,
+    prefetch_worker_generation: Arc<AtomicU64>,
 }
 
 impl ImageStore {
-    /// Cria vazio.
     #[must_use]
     pub fn new() -> Self {
-        let (tx, rx) = mpsc::channel();
-        let (pre_tx, pre_rx) = mpsc::channel();
+        let (load_tx, load_rx) = mpsc::channel::<LoadRequest>();
+        let (result_tx, result_rx) = mpsc::channel::<LoadMsg>();
+        std::thread::spawn(move || {
+            while let Ok(mut request) = load_rx.recv() {
+                // A decode that already started cannot be cheaply cancelled, but
+                // queued selections can. Keep only the newest pending request.
+                while let Ok(newer) = load_rx.try_recv() {
+                    request = newer;
+                }
+                let result = decode_photo(&request.path);
+                if result_tx
+                    .send(LoadMsg {
+                        id: request.id,
+                        path: request.path,
+                        result,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        let (pre_request_tx, pre_request_rx) =
+            mpsc::sync_channel::<PrefetchRequest>(PREFETCH_MAX_INFLIGHT);
+        let pre_request_rx = Arc::new(Mutex::new(pre_request_rx));
+        let (pre_result_tx, pre_rx) = mpsc::channel::<PrefetchMsg>();
+        let prefetch_worker_generation = Arc::new(AtomicU64::new(0));
+
+        for _ in 0..PREFETCH_MAX_INFLIGHT {
+            let request_rx = Arc::clone(&pre_request_rx);
+            let result_tx = pre_result_tx.clone();
+            let active_generation = Arc::clone(&prefetch_worker_generation);
+            std::thread::spawn(move || {
+                loop {
+                    let request = {
+                        let Ok(receiver) = request_rx.lock() else {
+                            break;
+                        };
+                        let Ok(request) = receiver.recv() else {
+                            break;
+                        };
+                        request
+                    };
+
+                    if request.generation != active_generation.load(Ordering::Acquire) {
+                        let _ = result_tx.send(PrefetchMsg {
+                            generation: request.generation,
+                            path: request.path,
+                            result: None,
+                        });
+                        continue;
+                    }
+
+                    let result = decode_photo(&request.path).ok();
+                    if result_tx
+                        .send(PrefetchMsg {
+                            generation: request.generation,
+                            path: request.path,
+                            result,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+        }
+
         Self {
-            tx,
-            rx,
+            load_tx,
+            rx: result_rx,
             next_id: 0,
             tex_seq: 0,
             current_id: 0,
             texture: None,
+            base_texture: None,
             display_px: egui::Vec2::ZERO,
+            base_display_px: egui::Vec2::ZERO,
             display_img: None,
-            full: None,
             full_px: (0, 0),
             error: None,
             has_selection: false,
-            pre_tx,
+            pre_request_tx,
             pre_rx,
             prefetch: HashMap::new(),
             prefetch_order: VecDeque::new(),
             prefetch_bytes: 0,
+            prefetch_budget_bytes: 0,
             inflight: HashSet::new(),
+            prefetch_generation: 0,
+            prefetch_worker_generation,
         }
     }
 
-    fn upload(&mut self, ctx: &egui::Context, img: &image::DynamicImage, tag: &str) {
+    fn texture_from_image(
+        &mut self,
+        ctx: &egui::Context,
+        image: &image::DynamicImage,
+        tag: &str,
+    ) -> (egui::TextureHandle, egui::Vec2) {
+        // RgbaFrame is intentionally transient: after upload we retain the
+        // original display-sized DynamicImage and the GPU texture, not a second
+        // RGBA CPU copy.
+        let frame = RgbaFrame::from_dynamic(image);
         self.tex_seq += 1;
-        self.display_px = egui::Vec2::new(img.width() as f32, img.height() as f32);
-        self.texture = Some(ctx.load_texture(
+        let size = egui::Vec2::new(frame.width() as f32, frame.height() as f32);
+        let color = egui::ColorImage::from_rgba_unmultiplied(
+            [frame.width() as usize, frame.height() as usize],
+            frame.bytes(),
+        );
+        let texture = ctx.load_texture(
             format!("photo-{tag}-{}", self.tex_seq),
-            to_color(img),
+            color,
             egui::TextureOptions::LINEAR,
-        ));
+        );
+        (texture, size)
     }
 
-    /// Seleciona foto: consome prefetch (instantâneo) ou decodifica em background.
+    fn install_base(&mut self, ctx: &egui::Context, decoded: DecodedPhoto, tag: &str) {
+        self.full_px = decoded.full_size;
+        let (texture, size) = self.texture_from_image(ctx, &decoded.display, tag);
+        self.display_px = size;
+        self.base_display_px = size;
+        self.base_texture = Some(texture.clone());
+        self.texture = Some(texture);
+        self.display_img = Some(decoded.display);
+    }
+
     pub fn select(&mut self, ctx: &egui::Context, photo: &crate::fs_browser::PhotoPath) {
         self.next_id += 1;
         let id = self.next_id;
         self.current_id = id;
         self.has_selection = true;
         self.texture = None;
+        self.base_texture = None;
         self.display_img = None;
-        self.full = None;
         self.error = None;
         let path = photo.path().to_path_buf();
 
-        if let Some(dec) = self.prefetch.remove(&path) {
-            self.prefetch_bytes = self.prefetch_bytes.saturating_sub(decoded_bytes(&dec));
-            self.display_px =
-                egui::Vec2::new(dec.display.width() as f32, dec.display.height() as f32);
-            self.full_px = dec.full_size;
-            self.display_img = Some(dec.display);
-            self.full = Some(dec.full);
-            let base = self.display_img.as_ref().expect("display recém-guardado");
-            let base = base.clone();
-            self.upload(ctx, &base, "hit");
+        if let Some(decoded) = self.prefetch.remove(&path) {
+            self.prefetch_bytes = self.prefetch_bytes.saturating_sub(decoded_bytes(&decoded));
+            self.install_base(ctx, decoded, "prefetch-hit");
             return;
         }
 
-        let tx = self.tx.clone();
-        let thread_ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let result = decode_photo(&path);
-            let _ = tx.send(LoadMsg { id, path, result });
-            thread_ctx.request_repaint();
-        });
-        ctx.request_repaint();
+        if self.load_tx.send(LoadRequest { id, path }).is_err() {
+            self.error = Some(String::from("loader de imagens foi encerrado"));
+            return;
+        }
+        ctx.request_repaint_after(LOAD_POLL_INTERVAL);
     }
 
-    /// Garante prefetch dos vizinhos [center-R, center+R] (chamar todo frame; barato).
-    /// `max_file_bytes`: pula arquivos maiores (0 = prefetch desativado).
-    /// Metadados (tamanho) são baratos; o decode pesado fica na thread.
     pub fn ensure_prefetched(
         &mut self,
         photos: &[crate::fs_browser::PhotoPath],
         center: usize,
-        max_file_bytes: u64,
+        budget_bytes: u64,
     ) {
-        if photos.is_empty() || max_file_bytes == 0 {
+        self.prefetch_budget_bytes = budget_bytes;
+        if photos.is_empty() || budget_bytes == 0 {
+            self.clear_prefetch();
             return;
         }
-        if photos.is_empty() {
+        if self.prefetch_bytes >= budget_bytes {
             return;
         }
-        for d in -PREFETCH_RADIUS..=PREFETCH_RADIUS {
-            if d == 0 {
+
+        let generation = self.prefetch_generation;
+        for distance in -PREFETCH_RADIUS..=PREFETCH_RADIUS {
+            if distance == 0 || self.inflight.len() >= PREFETCH_MAX_INFLIGHT {
                 continue;
             }
-            let Some(i) = center.checked_add_signed(d).filter(|i| *i < photos.len()) else {
+            let Some(index) = center
+                .checked_add_signed(distance)
+                .filter(|index| *index < photos.len())
+            else {
                 continue;
             };
-            let path = photos[i].path().to_path_buf();
-            if self.prefetch.contains_key(&path) || !self.inflight.insert(path.clone()) {
+            let path = photos[index].path().to_path_buf();
+            let already_running = self
+                .inflight
+                .iter()
+                .any(|(_, candidate)| candidate == &path);
+            let key = (generation, path.clone());
+            if self.prefetch.contains_key(&path)
+                || already_running
+                || !self.inflight.insert(key.clone())
+            {
                 continue;
             }
-            // Guarda barato: arquivo gigante nem entra na fila de decode.
-            let small_enough = std::fs::metadata(&path)
-                .map(|m| m.len() <= max_file_bytes)
-                .unwrap_or(true);
-            if !small_enough {
-                self.inflight.remove(&path);
-                continue;
+
+            match self
+                .pre_request_tx
+                .try_send(PrefetchRequest { generation, path })
+            {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+                    self.inflight.remove(&key);
+                    break;
+                }
             }
-            let tx = self.pre_tx.clone();
-            std::thread::spawn(move || {
-                let result = decode_photo(&path).ok();
-                let _ = tx.send(PrefetchMsg { path, result });
-            });
         }
     }
 
-    /// Drena resultados (principal + prefetch). Retorna `true` se há carga pendente.
     pub fn poll(&mut self, ctx: &egui::Context) -> bool {
-        while let Ok(msg) = self.pre_rx.try_recv() {
-            self.inflight.remove(&msg.path);
-            if let Some(dec) = msg.result {
-                self.prefetch_bytes += decoded_bytes(&dec);
-                self.prefetch_order.push_back(msg.path.clone());
-                self.prefetch.insert(msg.path, dec);
-                // Despeja os mais antigos por contagem E por bytes.
-                while self.prefetch.len() > PREFETCH_CAP || self.prefetch_bytes > PREFETCH_BYTES_CAP
-                {
-                    if let Some(old) = self.prefetch_order.pop_front() {
-                        if let Some(evicted) = self.prefetch.remove(&old) {
-                            self.prefetch_bytes =
-                                self.prefetch_bytes.saturating_sub(decoded_bytes(&evicted));
-                        }
-                    } else {
-                        break;
-                    }
-                }
+        while let Ok(message) = self.pre_rx.try_recv() {
+            self.inflight
+                .remove(&(message.generation, message.path.clone()));
+            if message.generation != self.prefetch_generation {
+                continue;
+            }
+            if let Some(decoded) = message.result {
+                self.prefetch_bytes += decoded_bytes(&decoded);
+                self.prefetch_order.push_back(message.path.clone());
+                self.prefetch.insert(message.path, decoded);
             }
         }
+        self.trim_prefetch();
+
         let mut pending = self.has_selection && self.texture.is_none() && self.error.is_none();
-        while let Ok(msg) = self.rx.try_recv() {
-            if msg.id != self.current_id {
-                continue; // obsoleto: usuário já navegou para outra foto
+        while let Ok(message) = self.rx.try_recv() {
+            if message.id != self.current_id {
+                continue;
             }
             pending = false;
-            match msg.result {
-                Ok(dec) => {
-                    self.full_px = dec.full_size;
-                    self.display_img = Some(dec.display);
-                    self.full = Some(dec.full);
-                    let base = self.display_img.as_ref().expect("display recém-guardado");
-                    let base = base.clone();
-                    self.upload(ctx, &base, "base");
+            match message.result {
+                Ok(decoded) => self.install_base(ctx, decoded, "base"),
+                Err(error) => {
+                    self.error = Some(format!("{}: {error}", message.path.display()));
                 }
-                Err(e) => self.error = Some(format!("{}: {e}", msg.path.display())),
             }
         }
+
         if pending {
-            ctx.request_repaint();
+            ctx.request_repaint_after(LOAD_POLL_INTERVAL);
         }
         pending
     }
 
-    /// Reconstrói a textura aplicando o estado do editor na imagem de display.
+    fn trim_prefetch(&mut self) {
+        while self.prefetch.len() > PREFETCH_CAP
+            || (self.prefetch_budget_bytes == 0 && !self.prefetch.is_empty())
+            || (self.prefetch_budget_bytes > 0 && self.prefetch_bytes > self.prefetch_budget_bytes)
+        {
+            let Some(oldest) = self.prefetch_order.pop_front() else {
+                break;
+            };
+            if let Some(evicted) = self.prefetch.remove(&oldest) {
+                self.prefetch_bytes = self.prefetch_bytes.saturating_sub(decoded_bytes(&evicted));
+            }
+        }
+    }
+
     pub fn rebuild_preview(&mut self, ctx: &egui::Context, state: &EditorState) {
-        let Some(base) = self.display_img.clone() else {
+        let Some(base) = self.display_img.as_ref() else {
             return;
         };
-        let edited = crate::editor::apply_to_image(&base, state);
-        self.upload(ctx, &edited, "preview");
+        let edited = crate::editor::apply_to_image(base, state);
+        let (texture, size) = self.texture_from_image(ctx, &edited, "preview");
+        self.texture = Some(texture);
+        self.display_px = size;
     }
 
-    /// Restaura a textura base (sem edições).
-    pub fn restore_base(&mut self, ctx: &egui::Context) {
-        let Some(base) = self.display_img.clone() else {
+    pub fn restore_base(&mut self, _ctx: &egui::Context) {
+        let Some(texture) = self.base_texture.as_ref() else {
             return;
         };
-        self.upload(ctx, &base, "base");
+        self.texture = Some(texture.clone());
+        self.display_px = self.base_display_px;
     }
 
-    /// Dimensões da imagem de display pré-edição (para rotate/bake).
     #[must_use]
     pub fn display_base_dims(&self) -> Option<(u32, u32)> {
-        self.display_img.as_ref().map(|d| (d.width(), d.height()))
+        self.display_img
+            .as_ref()
+            .map(|display| (display.width(), display.height()))
     }
 
-    /// Cópia da full-res para o thread de salvamento.
-    #[must_use]
-    pub fn full_image(&self) -> Option<image::DynamicImage> {
-        self.full.clone()
-    }
-
-    /// Estado atual para a UI.
     #[must_use]
     pub fn state(&self) -> LoadState {
         if !self.has_selection {
             return LoadState::Empty;
         }
-        if let Some(e) = &self.error {
-            return LoadState::Failed(e.clone());
+        if let Some(error) = &self.error {
+            return LoadState::Failed(error.clone());
         }
         match &self.texture {
-            Some(t) => LoadState::Loaded {
-                texture: t.clone(),
+            Some(texture) => LoadState::Loaded {
+                texture: texture.clone(),
                 display_px: self.display_px,
                 full_px: self.full_px,
             },
@@ -352,55 +382,21 @@ impl ImageStore {
         }
     }
 
-    /// Limpa prefetch (troca de pasta/arquivos).
     pub fn clear_prefetch(&mut self) {
+        self.prefetch_generation = self.prefetch_generation.wrapping_add(1);
+        self.prefetch_worker_generation
+            .store(self.prefetch_generation, Ordering::Release);
         self.prefetch.clear();
         self.prefetch_order.clear();
         self.prefetch_bytes = 0;
-        self.inflight.clear();
+        // Do not clear `inflight`: stale workers still count against the global
+        // concurrency cap until they report completion. Their results are
+        // discarded by generation in `poll`.
     }
 }
 
 impl Default for ImageStore {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn write_test_png(dir: &Path, name: &str, w: u32, h: u32) -> PathBuf {
-        let img = image::RgbImage::from_fn(w, h, |x, y| {
-            image::Rgb([(x % 256) as u8, (y % 256) as u8, 128])
-        });
-        let path = dir.join(name);
-        img.save(&path).expect("save png");
-        path
-    }
-
-    #[test]
-    fn decode_small_image_keeps_size() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = write_test_png(dir.path(), "s.png", 32, 24);
-        let dec = decode_photo(&path).expect("decode");
-        assert_eq!(dec.full_size, (32, 24));
-        assert_eq!((dec.display.width(), dec.display.height()), (32, 24));
-    }
-
-    #[test]
-    fn decode_large_image_downscales_display() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = write_test_png(dir.path(), "big.png", 3000, 2000);
-        let dec = decode_photo(&path).expect("decode");
-        assert_eq!(dec.full_size, (3000, 2000));
-        assert!(dec.display.width().max(dec.display.height()) <= DISPLAY_MAX_DIM);
-    }
-
-    #[test]
-    fn decode_missing_file_errors() {
-        let err = decode_photo(Path::new("/nao/existe/foto.png")).expect_err("deveria falhar");
-        assert!(matches!(err, LoadError::Io(_)));
     }
 }

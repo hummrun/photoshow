@@ -40,10 +40,10 @@ sem banco de dados, sem nuvem.
 Via script (Linux x86_64, sem root — baixa a última release):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/raillen/photoshow/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/wasd-lat/photoshow/main/install.sh | bash
 ```
 
-Por distribuição (na página de [releases](https://github.com/raillen/photoshow/releases)):
+Por distribuição (na página de [releases](https://github.com/wasd-lat/photoshow/releases)):
 
 | Sistema | Arquivo |
 |---|---|

@@ -1,0 +1,94 @@
+{
+  "id": "ui:photoshow-desktop",
+  "surface": "photoshow-desktop",
+  "states": [
+    {
+      "state": "default",
+      "applicable": true,
+      "user_visible_text": "Interface pronta para navegação."
+    },
+    {
+      "state": "hover",
+      "applicable": true,
+      "user_visible_text": "Controles interativos apresentam feedback de hover."
+    },
+    {
+      "state": "focus",
+      "applicable": true,
+      "user_visible_text": "O controle focado deve permanecer identificável sem depender apenas do mouse."
+    },
+    {
+      "state": "active",
+      "applicable": true,
+      "user_visible_text": "A ação pressionada fornece feedback imediato."
+    },
+    {
+      "state": "selected",
+      "applicable": true,
+      "user_visible_text": "Foto, pasta ou item selecionado possui indicação visual persistente."
+    },
+    {
+      "state": "disabled",
+      "applicable": true,
+      "user_visible_text": "Ações indisponíveis permanecem visíveis quando úteis, porém desabilitadas."
+    },
+    {
+      "state": "empty",
+      "applicable": true,
+      "user_visible_text": "Abra uma pasta ou fixe uma favorita para começar.",
+      "recovery": "Abrir pasta ou arquivos pelo menu Arquivo."
+    },
+    {
+      "state": "loading",
+      "applicable": true,
+      "user_visible_text": "carregando…",
+      "recovery": "Aguardar decode/scan; navegar para outra foto substitui pedidos obsoletos."
+    },
+    {
+      "state": "warning",
+      "applicable": true,
+      "user_visible_text": "Falhas recuperáveis são apresentadas na status bar.",
+      "recovery": "A operação principal continua quando possível."
+    },
+    {
+      "state": "error",
+      "applicable": true,
+      "user_visible_text": "Falhas de decode, IO e save mostram mensagem explícita.",
+      "recovery": "Corrigir arquivo/permissão/destino e repetir a operação."
+    },
+    {
+      "state": "destructive-confirmation",
+      "applicable": true,
+      "user_visible_text": "Sobrescrever original?",
+      "recovery": "Cancelar mantém o arquivo original."
+    },
+    {
+      "state": "alternate-theme",
+      "applicable": true,
+      "user_visible_text": "Slate, charcoal, frost e paper preservam a mesma semântica de estados."
+    },
+    {
+      "state": "narrow-viewport",
+      "applicable": true,
+      "user_visible_text": "Toolbar pode rolar horizontalmente em larguras pequenas."
+    },
+    {
+      "state": "high-contrast",
+      "applicable": false,
+      "reason": "Modo de alto contraste dedicado ainda não foi implementado; contraste deve ser auditado nos temas existentes."
+    },
+    {
+      "state": "alternate-locale",
+      "applicable": false,
+      "reason": "A interface atual ainda não possui sistema de i18n."
+    }
+  ],
+  "transitions": [
+    {"from": "empty", "to": "loading", "trigger": "open-folder/open-files"},
+    {"from": "loading", "to": "default", "trigger": "decode-or-scan-success"},
+    {"from": "loading", "to": "error", "trigger": "decode-or-io-failure"},
+    {"from": "default", "to": "destructive-confirmation", "trigger": "save-overwrite"},
+    {"from": "destructive-confirmation", "to": "default", "trigger": "confirm-or-cancel"},
+    {"from": "default", "to": "selected", "trigger": "select-photo-or-folder"}
+  ]
+}

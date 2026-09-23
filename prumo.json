@@ -1,0 +1,161 @@
+{
+  "version": 3,
+  "protocol": {
+    "version": 3,
+    "compatible": ">=3 <4"
+  },
+  "framework": {
+    "name": "prumo",
+    "version": "0.6.0"
+  },
+  "project": {
+    "name": "photoshow",
+    "type": [
+      "desktop",
+      "desktop-gui"
+    ]
+  },
+  "stack": {
+    "languages": [
+      "rust"
+    ],
+    "runtime": [
+      "eframe",
+      "egui"
+    ],
+    "tooling": [
+      "cargo",
+      "rustfmt",
+      "clippy"
+    ]
+  },
+  "features": [
+    "photo-viewer",
+    "filesystem-navigation",
+    "thumbnail-gallery",
+    "zoom-pan",
+    "non-destructive-editing",
+    "metadata",
+    "desktop-ui",
+    "packaging"
+  ],
+  "risk": [
+    "filesystem-write",
+    "performance-critical",
+    "large-media-memory"
+  ],
+  "quality": {
+    "performance": "high",
+    "accessibility": true,
+    "security": "standard"
+  },
+  "documentation": {
+    "entrypoint": "docs/PRUMO.md",
+    "canonical_format": "markdown",
+    "site": {
+      "enabled": true,
+      "source": "docs",
+      "generated": true,
+      "public_internal_views": true
+    },
+    "audiences": [
+      "user",
+      "developer",
+      "operations",
+      "agent"
+    ],
+    "source_locale": "pt-BR",
+    "locales": [
+      "pt-BR"
+    ],
+    "virtual_chunking": true
+  },
+  "context": {
+    "methodology": "lean-progressive-context",
+    "architecture": "progressive-context-architecture",
+    "mode": "progressive",
+    "budget_profile": "medium",
+    "profiles": {
+      "small": {
+        "context_target_tokens": 3000,
+        "context_hard_tokens": 6000,
+        "output_target_tokens": 500,
+        "output_hard_tokens": 1000,
+        "max_expansion_rounds": 1,
+        "max_delegation_depth": 0
+      },
+      "medium": {
+        "context_target_tokens": 8000,
+        "context_hard_tokens": 16000,
+        "output_target_tokens": 1500,
+        "output_hard_tokens": 3000,
+        "max_expansion_rounds": 2,
+        "max_delegation_depth": 1
+      },
+      "large": {
+        "context_target_tokens": 16000,
+        "context_hard_tokens": 32000,
+        "output_target_tokens": 3000,
+        "output_hard_tokens": 6000,
+        "max_expansion_rounds": 3,
+        "max_delegation_depth": 1
+      }
+    },
+    "deep_recursion": {
+      "enabled": false,
+      "experimental": true
+    },
+    "runtime": {
+      "database": ".prumo/runtime/prumo.db",
+      "completed_context_ttl": "0d",
+      "failed_context_ttl": "7d"
+    }
+  },
+  "intelligence": {
+    "enabled": true,
+    "path": ".prumo/history/project-intelligence.json",
+    "task_reports": true,
+    "track_input_tokens": true,
+    "track_output_tokens": true,
+    "track_cost": true,
+    "distinguish_observed_estimated": true
+  },
+  "orchestration": {
+    "protocol": "POP",
+    "orchestrator": "native",
+    "autonomy": "controlled"
+  },
+  "goals": {
+    "active_phase": "P01",
+    "active_goal": null
+  },
+  "ai": {
+    "orchestrator": "native",
+    "autonomy": "controlled",
+    "preferred_models": [
+      {
+        "id": "openai/gpt-5.6-sol",
+        "provider": "openai"
+      },
+      {
+        "id": "moonshot/kimi-k3",
+        "provider": "moonshot"
+      },
+      {
+        "id": "deepseek/v4.1-flash",
+        "provider": "deepseek"
+      }
+    ]
+  },
+  "ui": {
+    "interface_map": {
+      "enabled": true,
+      "targets": [
+        "developer",
+        "agent"
+      ],
+      "derivation": "off",
+      "path": "docs/ui-ux/interface-map.json"
+    }
+  }
+}

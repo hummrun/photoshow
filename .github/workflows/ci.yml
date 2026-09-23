@@ -1,0 +1,145 @@
+name: ci
+
+on:
+  push:
+    branches: ["main", "refactor/**", "fix/**", "feat/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust gates (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libegl1-mesa-dev libgl1-mesa-dev \
+            libxcursor-dev libxi-dev libxrandr-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Tests
+        run: cargo test --all-features --locked
+
+      - name: Release build
+        run: cargo build --release --locked
+
+  msrv:
+    name: MSRV 1.95
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libegl1-mesa-dev libgl1-mesa-dev \
+            libxcursor-dev libxi-dev libxrandr-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - run: cargo check --all-targets --all-features --locked
+
+
+  prumo-conformance:
+    name: Prumo 0.6 conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: false
+
+      - name: Fetch current Prumo
+        run: git clone --depth 1 https://github.com/poppy-team/prumo.git "$RUNNER_TEMP/prumo"
+
+      - name: Validate project
+        run: |
+          cd "$RUNNER_TEMP/prumo"
+          go run ./cmd/prumo validate "$GITHUB_WORKSPACE"
+          go run ./cmd/prumo --json doctor "$GITHUB_WORKSPACE"
+
+      - name: Verify declared UI contract
+        run: |
+          cd "$RUNNER_TEMP/prumo"
+
+          # Prumo 0.6 currently instantiates GoSymbolDeriver even when the
+          # project's derivation mode is "off". PhotoShow is Rust, so validate
+          # the declared map with Prumo's own loader/vocabulary/validator while
+          # deliberately omitting implementation-symbol derivation.
+          go run ./cmd/prumo ui config --path "$GITHUB_WORKSPACE"
+
+          mkdir -p cmd/photoshow-uimap-check
+          cat > cmd/photoshow-uimap-check/main.go <<'EOF'
+          package main
+
+          import (
+              "fmt"
+              "os"
+
+              "github.com/raillen/prumo/internal/uimap"
+          )
+
+          func main() {
+              root := os.Getenv("GITHUB_WORKSPACE")
+              cfg, err := uimap.ResolveConfig(root)
+              if err != nil {
+                  panic(err)
+              }
+              if !cfg.Enabled {
+                  panic("PhotoShow interface map unexpectedly disabled")
+              }
+              if cfg.Derivation != "off" {
+                  panic("PhotoShow Rust UI requires derivation=off until a Rust symbol deriver exists")
+              }
+              m, err := uimap.Load(cfg.Path)
+              if err != nil {
+                  panic(err)
+              }
+              vocab, err := uimap.LoadVocabulary(root, m)
+              if err != nil {
+                  panic(err)
+              }
+              report := uimap.Validate(root, m, vocab, nil)
+              for _, finding := range report.Findings {
+                  fmt.Printf("%s %s [%s]: %s\n", finding.Severity, finding.Code, finding.Node, finding.Message)
+              }
+              if !report.OK() {
+                  os.Exit(1)
+              }
+              fmt.Printf("declared UI map valid: %d elements, %d edges\n", report.Elements, report.Edges)
+          }
+          EOF
+          go run ./cmd/photoshow-uimap-check

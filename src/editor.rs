@@ -52,10 +52,16 @@ impl EditorState {
 }
 
 /// Pilha de edição com undo/redo (snapshots baratos: 2 campos).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct EditorStack {
     history: Vec<EditorState>,
     future: Vec<EditorState>,
+}
+
+impl Default for EditorStack {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EditorStack {
@@ -71,7 +77,7 @@ impl EditorStack {
     /// Estado atual.
     #[must_use]
     pub fn state(&self) -> EditorState {
-        *self.history.last().expect("histórico nunca vazio")
+        self.history.last().copied().unwrap_or_default()
     }
 
     /// Há edições pendentes?
@@ -135,9 +141,11 @@ impl EditorStack {
 
     /// Desfaz a última operação; `false` se já está limpo.
     pub fn undo(&mut self) -> bool {
-        if self.history.len() > 1 {
-            let cur = self.history.pop().expect("len > 1");
-            self.future.push(cur);
+        if self.history.len() <= 1 {
+            return false;
+        }
+        if let Some(current) = self.history.pop() {
+            self.future.push(current);
             true
         } else {
             false
@@ -230,32 +238,79 @@ pub fn bake(
     image::DynamicImage::ImageRgba8(image::imageops::crop_imm(&rotated, x, y, w, h).to_image())
 }
 
-/// Grava a imagem assada respeitando a qualidade JPEG configurada.
-/// Outras extensões usam o encoder padrão do crate `image`.
-pub fn save_baked(
+/// Grava primeiro em arquivo temporário no mesmo diretório e só então promove
+/// o resultado para o destino. O original nunca é truncado antes do encode
+/// terminar com sucesso.
+fn save_baked_with_metadata(
     img: &image::DynamicImage,
     dest: &std::path::Path,
     jpeg_quality: u8,
-) -> Result<(), String> {
-    let is_jpeg = dest
+    metadata: &crate::metadata::EmbeddedMetadata,
+) -> Result<crate::metadata::MetadataReport, String> {
+    use std::io::Write as _;
+
+    let extension = dest
         .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg"))
-        .unwrap_or(false);
-    if is_jpeg {
-        use std::io::Write as _;
-        let file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
-        let mut buf = std::io::BufWriter::new(file);
-        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(
-            &mut buf,
-            jpeg_quality.clamp(1, 100),
-        );
-        enc.encode_image(img).map_err(|e| e.to_string())?;
-        buf.flush().map_err(|e| e.to_string())?;
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    let file = std::fs::File::create(dest).map_err(|error| error.to_string())?;
+    let mut writer = std::io::BufWriter::new(file);
+
+    let report = match extension.as_str() {
+        "jpg" | "jpeg" => {
+            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
+                &mut writer,
+                jpeg_quality.clamp(1, 100),
+            );
+            let report = crate::metadata::apply_to_encoder(&mut encoder, metadata);
+            img.write_with_encoder(encoder)
+                .map_err(|error| error.to_string())?;
+            report
+        }
+        "png" => {
+            let mut encoder = image::codecs::png::PngEncoder::new(&mut writer);
+            let report = crate::metadata::apply_to_encoder(&mut encoder, metadata);
+            img.write_with_encoder(encoder)
+                .map_err(|error| error.to_string())?;
+            report
+        }
+        "webp" => {
+            let mut encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut writer);
+            let report = crate::metadata::apply_to_encoder(&mut encoder, metadata);
+            img.write_with_encoder(encoder)
+                .map_err(|error| error.to_string())?;
+            report
+        }
+        _ => {
+            drop(writer);
+            img.save(dest).map_err(|error| error.to_string())?;
+            return Ok(crate::metadata::unsupported_report(metadata));
+        }
+    };
+
+    writer.flush().map_err(|error| error.to_string())?;
+    Ok(report)
+}
+
+/// Grava primeiro em arquivo temporário no mesmo diretório e só então promove
+/// o resultado para o destino. O original nunca é truncado antes do encode
+/// terminar com sucesso. EXIF/ICC são preservados quando isso é semanticamente
+/// seguro e suportado pelo encoder.
+pub fn save_baked_atomic(
+    img: &image::DynamicImage,
+    source: &std::path::Path,
+    dest: &std::path::Path,
+    jpeg_quality: u8,
+) -> Result<crate::metadata::MetadataReport, String> {
+    let metadata = crate::metadata::read_embedded_metadata(source);
+    let mut report = crate::metadata::MetadataReport::default();
+    crate::atomic_file::write_atomic(dest, |temp| {
+        report = save_baked_with_metadata(img, temp, jpeg_quality, &metadata)?;
         Ok(())
-    } else {
-        img.save(dest).map_err(|e| e.to_string())
-    }
+    })?;
+    Ok(report)
 }
 
 #[cfg(test)]

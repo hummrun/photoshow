@@ -1,0 +1,337 @@
+{
+  "id": "ui:photoshow-desktop",
+  "version": 1,
+  "surface": "photoshow-desktop",
+  "note": "Canonical semantic map of the current egui desktop surface. Geometry remains dock/user-resizable; the map declares composition and interaction intent.",
+  "platforms": [
+    "desktop"
+  ],
+  "states_source": "docs/ui-ux/state-matrix.json",
+  "derivation": {
+    "sources": [
+      "src/app.rs",
+      "src/app/**/*.rs",
+      "src/ui/**/*.rs"
+    ],
+    "mode": "off"
+  },
+  "tree": [
+    {
+      "id": "node:shell",
+      "kind": "shell",
+      "label": "PhotoShow",
+      "role": "application-shell",
+      "intent": "Concentrar navegação, visualização e edição leve sem bloquear a imagem.",
+      "slot": {
+        "region": "root",
+        "order": 0,
+        "align": "stretch",
+        "stack": "column"
+      },
+      "states": [
+        "default",
+        "empty",
+        "loading",
+        "error",
+        "alternate-theme",
+        "narrow-viewport"
+      ],
+      "inputs": [
+        "keyboard",
+        "pointer"
+      ],
+      "implementation": {
+        "symbol": "PhotoShowApp",
+        "path": "src/app.rs",
+        "status": "implemented"
+      },
+      "children": [
+        {
+          "id": "node:toolbar",
+          "kind": "region",
+          "label": "Toolbar",
+          "role": "primary-actions",
+          "intent": "Expor abertura, edição, filtros, fullscreen e configurações sem cobrir o viewer.",
+          "slot": {
+            "region": "header",
+            "order": 0,
+            "align": "stretch",
+            "stack": "row"
+          },
+          "states": [
+            "default",
+            "disabled",
+            "narrow-viewport"
+          ],
+          "inputs": [
+            "keyboard",
+            "pointer"
+          ],
+          "implementation": {
+            "symbol": "ui",
+            "path": "src/app.rs",
+            "status": "implemented"
+          }
+        },
+        {
+          "id": "node:workspace",
+          "kind": "region",
+          "label": "Workspace",
+          "role": "dock-workspace",
+          "intent": "Permitir que o usuário distribua browser, viewer e galeria conforme a tarefa.",
+          "slot": {
+            "region": "body",
+            "order": 1,
+            "align": "stretch",
+            "stack": "row",
+            "weight": 1
+          },
+          "states": [
+            "default",
+            "loading",
+            "empty"
+          ],
+          "inputs": [
+            "pointer",
+            "keyboard"
+          ],
+          "implementation": {
+            "symbol": "DockTab",
+            "path": "src/app.rs",
+            "status": "implemented"
+          },
+          "children": [
+            {
+              "id": "node:browser",
+              "kind": "pane",
+              "label": "Navegador",
+              "role": "filesystem-browser",
+              "intent": "Encontrar pastas e fotos rapidamente mesmo em coleções grandes.",
+              "slot": {
+                "region": "sidebar",
+                "order": 0,
+                "align": "stretch",
+                "stack": "column",
+                "weight": 24
+              },
+              "states": [
+                "default",
+                "empty",
+                "loading",
+                "selected",
+                "warning"
+              ],
+              "inputs": [
+                "keyboard",
+                "pointer"
+              ],
+              "implementation": {
+                "symbol": "show_browser",
+                "path": "src/app/browser.rs",
+                "status": "implemented"
+              }
+            },
+            {
+              "id": "node:viewer",
+              "kind": "pane",
+              "label": "Visualizador",
+              "role": "photo-viewer",
+              "intent": "Dar prioridade visual à foto e a interações diretas de zoom, pan e crop.",
+              "slot": {
+                "region": "body",
+                "order": 1,
+                "align": "stretch",
+                "stack": "absolute",
+                "weight": 76
+              },
+              "states": [
+                "default",
+                "empty",
+                "loading",
+                "error",
+                "active"
+              ],
+              "inputs": [
+                "pointer",
+                "keyboard"
+              ],
+              "implementation": {
+                "symbol": "show_viewer",
+                "path": "src/app/viewer.rs",
+                "status": "implemented"
+              }
+            },
+            {
+              "id": "node:gallery",
+              "kind": "pane",
+              "label": "Miniaturas",
+              "role": "virtual-thumbnail-gallery",
+              "intent": "Navegar visualmente por coleções grandes com custo proporcional ao viewport.",
+              "slot": {
+                "region": "body",
+                "order": 2,
+                "align": "stretch",
+                "stack": "column"
+              },
+              "states": [
+                "default",
+                "empty",
+                "loading",
+                "selected"
+              ],
+              "inputs": [
+                "pointer",
+                "keyboard"
+              ],
+              "implementation": {
+                "symbol": "show_filmstrip_content",
+                "path": "src/app/filmstrip.rs",
+                "status": "implemented"
+              }
+            }
+          ]
+        },
+        {
+          "id": "node:status",
+          "kind": "status",
+          "label": "Status",
+          "role": "operation-feedback",
+          "intent": "Mostrar seleção, resolução, zoom e operações assíncronas sem modal desnecessário.",
+          "slot": {
+            "region": "footer",
+            "order": 2,
+            "align": "stretch",
+            "stack": "row"
+          },
+          "states": [
+            "default",
+            "loading",
+            "warning",
+            "error"
+          ],
+          "implementation": {
+            "symbol": "ui",
+            "path": "src/app.rs",
+            "status": "implemented"
+          }
+        },
+        {
+          "id": "node:rename-dialog",
+          "kind": "overlay",
+          "label": "Renomear",
+          "role": "rename-dialog",
+          "intent": "Renomear a foto atual com validação antes de tocar o filesystem.",
+          "slot": {
+            "region": "overlay",
+            "order": 3,
+            "align": "center",
+            "stack": "column",
+            "condition": "rename_open"
+          },
+          "states": [
+            "default",
+            "error"
+          ],
+          "inputs": [
+            "keyboard",
+            "pointer"
+          ],
+          "implementation": {
+            "symbol": "show_rename_window",
+            "path": "src/app.rs",
+            "status": "implemented"
+          }
+        },
+        {
+          "id": "node:settings-dialog",
+          "kind": "overlay",
+          "label": "Configurações",
+          "role": "settings-dialog",
+          "intent": "Alterar preferências explícitas sem criar uma tela separada.",
+          "slot": {
+            "region": "overlay",
+            "order": 4,
+            "align": "center",
+            "stack": "column",
+            "condition": "settings_open"
+          },
+          "states": [
+            "default",
+            "alternate-theme"
+          ],
+          "inputs": [
+            "keyboard",
+            "pointer"
+          ],
+          "implementation": {
+            "symbol": "show_settings_window",
+            "path": "src/app.rs",
+            "status": "implemented"
+          }
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "kind": "data",
+      "from": "node:browser",
+      "to": "node:viewer",
+      "label": "selected PhotoPath"
+    },
+    {
+      "kind": "data",
+      "from": "node:browser",
+      "to": "node:gallery",
+      "label": "filtered photo collection"
+    },
+    {
+      "kind": "event",
+      "from": "node:gallery",
+      "to": "node:viewer",
+      "label": "select photo"
+    },
+    {
+      "kind": "event",
+      "from": "node:toolbar",
+      "to": "node:viewer",
+      "label": "edit/zoom/fullscreen actions"
+    },
+    {
+      "kind": "data",
+      "from": "node:viewer",
+      "to": "node:status",
+      "label": "load dimensions and zoom"
+    },
+    {
+      "kind": "overlay",
+      "from": "node:toolbar",
+      "to": "node:settings-dialog",
+      "label": "open settings"
+    },
+    {
+      "kind": "overlay",
+      "from": "node:browser",
+      "to": "node:rename-dialog",
+      "label": "rename current photo"
+    },
+    {
+      "kind": "focus",
+      "from": "node:toolbar",
+      "to": "node:browser",
+      "label": "keyboard navigation order"
+    },
+    {
+      "kind": "focus",
+      "from": "node:browser",
+      "to": "node:viewer",
+      "label": "keyboard navigation order"
+    },
+    {
+      "kind": "focus",
+      "from": "node:viewer",
+      "to": "node:gallery",
+      "label": "keyboard navigation order"
+    }
+  ]
+}

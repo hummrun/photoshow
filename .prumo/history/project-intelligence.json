@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "updated_at": "2026-09-23T06:32:00Z",
+  "summary": {
+    "tasks": 2,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cached_tokens": 0,
+    "direct_cost": 0
+  },
+  "tasks": [
+    {
+      "id": "P01-hardening-code",
+      "status": "completed",
+      "evidence": {
+        "commit": "ab1de4a20ffe0b0b2c6d44d62891faddc48004d8",
+        "ci_run": 35826785330,
+        "linux": "success",
+        "windows": "success",
+        "msrv_1_95": "success",
+        "prumo_0_6": "success"
+      }
+    },
+    {
+      "id": "P01-synthetic-scan-baseline",
+      "status": "completed",
+      "evidence": {
+        "commit": "ab1de4a20ffe0b0b2c6d44d62891faddc48004d8",
+        "workflow_run": 35826785654,
+        "artifact_id": 10735377501,
+        "entries_1000_ms": 2,
+        "entries_10000_ms": 13,
+        "entries_50000_ms": 68,
+        "process_peak_rss_kib": 95048,
+        "release_binary_bytes": 22450136
+      }
+    },
+    {
+      "id": "P01-synthetic-scan-baseline",
+      "status": "completed",
+      "evidence": {
+        "commit": "ab1de4a20ffe0b0b2c6d44d62891faddc48004d8",
+        "workflow_run": 35826785654,
+        "scan_ms": {
+          "1000": 2,
+          "10000": 13,
+          "50000": 68
+        },
+        "harness_peak_rss_kib": 95048,
+        "release_binary_bytes": 22450136
+      }
+    }
+  ],
+  "debt": [
+    {
+      "id": "photoshow-hardening-001",
+      "kind": "performance-evidence",
+      "status": "active",
+      "summary": "Synthetic 1k/10k/50k scan baseline captured. Remaining: startup/idle RSS, viewer/gallery frame-time and representative low-end hardware evidence."
+    },
+    {
+      "id": "photoshow-release-001",
+      "kind": "release-verification",
+      "status": "active",
+      "summary": "Exercise the hardened release workflow from a real prerelease tag and verify remote checksum installation."
+    }
+  ]
+}

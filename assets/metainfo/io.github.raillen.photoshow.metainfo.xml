@@ -13,8 +13,8 @@
     </p>
   </description>
   <launchable type="desktop-id">io.github.raillen.photoshow.desktop</launchable>
-  <url type="homepage">https://github.com/raillen/photoshow</url>
-  <url type="bugtracker">https://github.com/raillen/photoshow/issues</url>
+  <url type="homepage">https://github.com/wasd-lat/photoshow</url>
+  <url type="bugtracker">https://github.com/wasd-lat/photoshow/issues</url>
   <url type="donation">https://ko-fi.com/raillen</url>
   <content_rating type="oars-1.1" />
 </component>

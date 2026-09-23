@@ -3,37 +3,62 @@
 //! Tipos de domínio (anti-primitivo): [`PhotoPath`] em vez de `String` solta.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, mpsc};
 
 /// Extensões suportadas no MVP (minúsculas, sem ponto).
 pub const SUPPORTED_EXTENSIONS: &[&str] =
     &["jpg", "jpeg", "png", "webp", "tiff", "tif", "bmp", "gif"];
 
-/// Caminho de foto validado pela extensão.
+/// Dados imutáveis compartilhados por todas as views da mesma foto.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct PhotoPathData {
+    path: PathBuf,
+    display_name: String,
+    sort_key: String,
+}
+
+/// Handle barato e validado de uma foto.
+///
+/// Clonar este tipo clona apenas o `Arc`; `photos` e `visible` não duplicam
+/// buffers de caminho/nome para coleções grandes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PhotoPath(PathBuf);
+pub struct PhotoPath(Arc<PhotoPathData>);
 
 impl PhotoPath {
     /// Constrói a partir de qualquer caminho; aceita só extensões suportadas.
     pub fn new(path: PathBuf) -> Option<Self> {
-        has_supported_extension(&path).then_some(Self(path))
+        if !has_supported_extension(&path) {
+            return None;
+        }
+        let display_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        let sort_key = display_name.to_lowercase();
+        Some(Self(Arc::new(PhotoPathData {
+            path,
+            display_name,
+            sort_key,
+        })))
     }
 
     /// Caminho interno.
-    /// TODO(Fase 2): remover o allow quando o image_store carregar por ele.
-    #[allow(dead_code)]
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.0
+        &self.0.path
     }
 
-    /// Nome do arquivo para exibição (fallback: caminho completo).
+    /// Nome do arquivo para exibição.
     #[must_use]
     pub fn display_name(&self) -> String {
-        self.0
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.0.to_string_lossy().into_owned())
+        self.0.display_name.clone()
+    }
+
+    /// Chave case-insensitive pré-computada usada para ordenação.
+    #[must_use]
+    pub fn sort_key(&self) -> &str {
+        &self.0.sort_key
     }
 }
 
@@ -52,18 +77,78 @@ pub fn has_supported_extension(path: &Path) -> bool {
 /// outra pasta antes de terminar, o resultado obsoleto é descartado pelo app.
 /// Usa o crate `ignore`: pula `.git` sempre, ocultas e `gitignore` conforme
 /// as opções (rápido em árvores com milhares de arquivos não-imagem).
-pub fn scan_dir_async(dir: PathBuf, opts: ScanOptions, id: u64) -> mpsc::Receiver<ScanResult> {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let (photos, files_seen) = walk_photos(&dir, opts);
-        let _ = tx.send(ScanResult {
+struct ScanRequest {
+    id: u64,
+    dir: PathBuf,
+    opts: ScanOptions,
+    result_tx: mpsc::Sender<ScanResult>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScanController {
+    generation: Arc<AtomicU64>,
+    request_tx: mpsc::Sender<ScanRequest>,
+}
+
+impl ScanController {
+    #[must_use]
+    pub fn new() -> Self {
+        let generation = Arc::new(AtomicU64::new(0));
+        let active_generation = Arc::clone(&generation);
+        let (request_tx, request_rx) = mpsc::channel::<ScanRequest>();
+
+        std::thread::spawn(move || {
+            while let Ok(mut request) = request_rx.recv() {
+                // If several directory changes happened before this worker got
+                // CPU time, only the newest queued scan is useful.
+                while let Ok(newer) = request_rx.try_recv() {
+                    request = newer;
+                }
+
+                let Some((photos, files_seen, errors_seen, sample_errors)) =
+                    walk_photos(&request.dir, request.opts, &active_generation, request.id)
+                else {
+                    continue;
+                };
+                let _ = request.result_tx.send(ScanResult {
+                    id: request.id,
+                    dir: request.dir,
+                    photos,
+                    files_seen,
+                    errors_seen,
+                    sample_errors,
+                });
+            }
+        });
+
+        Self {
+            generation,
+            request_tx,
+        }
+    }
+
+    /// Starts a scan and invalidates every older scan owned by this controller.
+    ///
+    /// A single persistent worker owns filesystem traversal. Superseded walks
+    /// observe the generation and abort cooperatively; queued requests collapse
+    /// to the newest one before the next traversal begins.
+    pub fn scan(&self, dir: PathBuf, opts: ScanOptions, id: u64) -> mpsc::Receiver<ScanResult> {
+        self.generation.store(id, Ordering::Release);
+        let (result_tx, result_rx) = mpsc::channel();
+        let _ = self.request_tx.send(ScanRequest {
             id,
             dir,
-            photos,
-            files_seen,
+            opts,
+            result_tx,
         });
-    });
-    rx
+        result_rx
+    }
+}
+
+impl Default for ScanController {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Opções da varredura (espelham as preferências do menu ⚙).
@@ -85,6 +170,10 @@ pub struct ScanResult {
     pub photos: Vec<PhotoPath>,
     /// Arquivos inspecionados (para o status "N verificados").
     pub files_seen: u64,
+    /// Entradas que falharam por IO/permissão durante a caminhada.
+    pub errors_seen: u64,
+    /// Pequena amostra para diagnóstico sem acumular mensagens de árvores enormes.
+    pub sample_errors: Vec<String>,
 }
 
 fn is_skipped_dir(entry: &ignore::DirEntry) -> bool {
@@ -92,7 +181,14 @@ fn is_skipped_dir(entry: &ignore::DirEntry) -> bool {
         && entry.file_name().to_string_lossy() == ".git"
 }
 
-fn walk_photos(dir: &Path, opts: ScanOptions) -> (Vec<PhotoPath>, u64) {
+fn walk_photos(
+    dir: &Path,
+    opts: ScanOptions,
+    active_generation: &AtomicU64,
+    id: u64,
+) -> Option<(Vec<PhotoPath>, u64, u64, Vec<String>)> {
+    const ERROR_SAMPLE_CAP: usize = 5;
+
     let mut builder = ignore::WalkBuilder::new(dir);
     builder
         .hidden(opts.skip_hidden)
@@ -103,34 +199,44 @@ fn walk_photos(dir: &Path, opts: ScanOptions) -> (Vec<PhotoPath>, u64) {
         .require_git(false)
         .follow_links(false)
         .filter_entry(|e| !is_skipped_dir(e));
+
     let mut photos = Vec::new();
     let mut files_seen = 0u64;
-    for entry in builder.build().filter_map(Result::ok) {
+    let mut errors_seen = 0u64;
+    let mut sample_errors = Vec::new();
+
+    for result in builder.build() {
+        if active_generation.load(Ordering::Acquire) != id {
+            return None;
+        }
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(error) => {
+                errors_seen += 1;
+                if sample_errors.len() < ERROR_SAMPLE_CAP {
+                    sample_errors.push(error.to_string());
+                }
+                continue;
+            }
+        };
         if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
             continue;
         }
         files_seen += 1;
-        if let Some(p) = PhotoPath::new(entry.path().to_path_buf()) {
-            photos.push(p);
+        if let Some(photo) = PhotoPath::new(entry.path().to_path_buf()) {
+            photos.push(photo);
         }
     }
-    photos.sort_by(|a, b| {
-        a.display_name()
-            .to_lowercase()
-            .cmp(&b.display_name().to_lowercase())
-    });
-    (photos, files_seen)
+
+    photos.sort_by(|left, right| left.sort_key().cmp(right.sort_key()));
+    Some((photos, files_seen, errors_seen, sample_errors))
 }
 
 /// Filtra uma lista solta de arquivos (diálogo rfd) para fotos válidas.
 #[must_use]
 pub fn filter_loose_files(paths: Vec<PathBuf>) -> Vec<PhotoPath> {
     let mut photos: Vec<PhotoPath> = paths.into_iter().filter_map(PhotoPath::new).collect();
-    photos.sort_by(|a, b| {
-        a.display_name()
-            .to_lowercase()
-            .cmp(&b.display_name().to_lowercase())
-    });
+    photos.sort_by(|left, right| left.sort_key().cmp(right.sort_key()));
     photos
 }
 
@@ -217,7 +323,7 @@ mod tests {
         for name in ["b.png", "a.JPG", "nota.txt", "c.gif"] {
             fs::write(dir.path().join(name), b"x").expect("write");
         }
-        let res = recv_scan(scan_dir_async(dir.path().to_path_buf(), scan_opts(), 7));
+        let res = recv_scan(ScanController::new().scan(dir.path().to_path_buf(), scan_opts(), 7));
         assert_eq!(res.id, 7);
         assert_eq!(res.files_seen, 4);
         let names: Vec<_> = res.photos.iter().map(|p| p.display_name()).collect();
@@ -227,7 +333,7 @@ mod tests {
     #[test]
     fn scan_async_empty_dir_returns_empty_vec() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let res = recv_scan(scan_dir_async(dir.path().to_path_buf(), scan_opts(), 1));
+        let res = recv_scan(ScanController::new().scan(dir.path().to_path_buf(), scan_opts(), 1));
         assert!(res.photos.is_empty());
     }
 
@@ -242,7 +348,7 @@ mod tests {
         fs::create_dir(sub.join(".hidden")).expect("mkdir");
         fs::write(sub.join(".hidden").join("c.jpg"), b"x").expect("write");
 
-        let res = recv_scan(scan_dir_async(dir.path().to_path_buf(), scan_opts(), 1));
+        let res = recv_scan(ScanController::new().scan(dir.path().to_path_buf(), scan_opts(), 1));
         let names: Vec<_> = res.photos.iter().map(|p| p.display_name()).collect();
         assert_eq!(names, vec!["b.jpg"]);
 
@@ -250,7 +356,7 @@ mod tests {
             respect_gitignore: false,
             skip_hidden: false,
         };
-        let res = recv_scan(scan_dir_async(dir.path().to_path_buf(), no_opts, 2));
+        let res = recv_scan(ScanController::new().scan(dir.path().to_path_buf(), no_opts, 2));
         let names: Vec<_> = res.photos.iter().map(|p| p.display_name()).collect();
         assert_eq!(names, vec!["a.png", "b.jpg", "c.jpg"]);
     }
@@ -265,7 +371,7 @@ mod tests {
             respect_gitignore: false,
             skip_hidden: false,
         };
-        let res = recv_scan(scan_dir_async(dir.path().to_path_buf(), no_opts, 1));
+        let res = recv_scan(ScanController::new().scan(dir.path().to_path_buf(), no_opts, 1));
         assert!(res.photos.is_empty());
     }
 
@@ -305,6 +411,53 @@ mod tests {
         assert!(rename_photo(&dest, "outra.png").is_err());
         assert!(rename_photo(&dest, "").is_err());
         assert!(rename_photo(&dest, "a/b.png").is_err());
+    }
+
+    #[test]
+    fn superseded_generation_stops_before_walking() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(dir.path().join("a.jpg"), b"x").expect("write");
+        let generation = AtomicU64::new(2);
+
+        let result = walk_photos(dir.path(), scan_opts(), &generation, 1);
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    #[ignore = "manual performance evidence: creates up to 50k filesystem entries"]
+    fn benchmark_scan_synthetic_collections() {
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let controller = ScanController::new();
+        let mut created = 0usize;
+
+        for (generation, target) in [1_000usize, 10_000, 50_000].into_iter().enumerate() {
+            for index in created..target {
+                let path = dir.path().join(format!("image-{index:05}.jpg"));
+                fs::write(path, []).expect("create benchmark entry");
+            }
+            created = target;
+
+            let started = Instant::now();
+            let result = controller
+                .scan(dir.path().to_path_buf(), scan_opts(), generation as u64 + 1)
+                .recv_timeout(Duration::from_secs(120))
+                .expect("benchmark scan finishes");
+            let elapsed = started.elapsed();
+
+            println!(
+                "photoshow_perf scenario=folder_scan entries={} photos={} errors={} elapsed_ms={}",
+                target,
+                result.photos.len(),
+                result.errors_seen,
+                elapsed.as_millis()
+            );
+            assert_eq!(result.files_seen as usize, target);
+            assert_eq!(result.photos.len(), target);
+            assert_eq!(result.errors_seen, 0);
+        }
     }
 
     #[test]

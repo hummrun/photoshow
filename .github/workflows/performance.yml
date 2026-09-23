@@ -1,0 +1,70 @@
+name: performance-evidence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["refactor/prumo-performance-hardening"]
+    paths:
+      - ".github/workflows/performance.yml"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  synthetic-folder-scan:
+    name: Synthetic folder scan baseline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Linux native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libegl1-mesa-dev libgl1-mesa-dev \
+            libxcursor-dev libxi-dev libxrandr-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            time
+
+      - name: Record environment
+        run: |
+          mkdir -p performance-evidence
+          {
+            echo "commit=$GITHUB_SHA"
+            echo "runner_os=$RUNNER_OS"
+            echo "date_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "cpu:"
+            lscpu
+            echo "memory:"
+            free -h
+          } > performance-evidence/environment.txt
+
+      - name: Build release tests
+        run: cargo test --release --all-features --locked --no-run
+
+      - name: Run 1k / 10k / 50k scan harness
+        shell: bash
+        run: |
+          set -o pipefail
+          /usr/bin/time -v \
+            cargo test --release --all-features --locked \
+              fs_browser::tests::benchmark_scan_synthetic_collections \
+              -- --ignored --exact --nocapture \
+            2>&1 | tee performance-evidence/folder-scan.txt
+
+      - name: Record release binary size
+        run: |
+          cargo build --release --locked
+          stat -c '%s' target/release/photoshow > performance-evidence/release-binary-bytes.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photoshow-performance-evidence-${{ github.sha }}
+          path: performance-evidence/
+          if-no-files-found: error

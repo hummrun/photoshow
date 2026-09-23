@@ -11,12 +11,41 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libegl1-mesa-dev libgl1-mesa-dev \
+            libxcursor-dev libxi-dev libxrandr-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --all-features --locked
+
   linux-tarball:
+    needs: quality-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Linux native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libegl1-mesa-dev libgl1-mesa-dev \
+            libxcursor-dev libxi-dev libxrandr-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
       - run: cargo build --release --locked
       - name: stage tarball
         run: |
@@ -26,18 +55,41 @@ jobs:
           cp dist/photoshow.desktop "$STAGE/"
           cp assets/icons/photoshow.svg "$STAGE/"
           cp LICENSE-MIT README.md CHANGELOG.md "$STAGE/"
-          tar czf "$STAGE.tar.gz" "$STAGE"
+          tar czf "$STAGE.tar.gz" -C "$STAGE" \
+            photoshow photoshow.desktop photoshow.svg LICENSE-MIT README.md CHANGELOG.md
+
+      - name: smoke install tarball
+        run: |
+          STAGE="photoshow-${{ github.ref_name }}-x86_64-unknown-linux-gnu"
+          TEST_HOME="$(mktemp -d)"
+          HOME="$TEST_HOME" \
+          BIN_DIR="$TEST_HOME/.local/bin" \
+          PHOTOSHOW_ARCHIVE="$PWD/$STAGE.tar.gz" \
+          PHOTOSHOW_VERSION="${{ github.ref_name }}" \
+            bash install.sh
+          test -x "$TEST_HOME/.local/bin/photoshow"
+          test -f "$TEST_HOME/.local/share/applications/photoshow.desktop"
+          test -f "$TEST_HOME/.local/share/icons/hicolor/scalable/apps/photoshow.svg"
       - uses: actions/upload-artifact@v4
         with:
           name: linux-tarball
           path: photoshow-*.tar.gz
 
   deb:
+    needs: quality-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Linux native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libegl1-mesa-dev libgl1-mesa-dev \
+            libxcursor-dev libxi-dev libxrandr-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deb
@@ -48,11 +100,20 @@ jobs:
           path: target/debian/*.deb
 
   rpm:
+    needs: quality-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Linux native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libegl1-mesa-dev libgl1-mesa-dev \
+            libxcursor-dev libxi-dev libxrandr-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-generate-rpm
@@ -65,6 +126,7 @@ jobs:
           path: target/generate-rpm/*.rpm
 
   windows-exe:
+    needs: quality-gate
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,6 +155,17 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+      - name: generate SHA-256 checksums
+        shell: bash
+        run: |
+          find . -maxdepth 1 -type f \( \
+            -name 'photoshow-*.tar.gz' -o \
+            -name 'photoshow_*.deb' -o \
+            -name 'photoshow-*.rpm' -o \
+            -name 'photoshow-*.zip' \
+          \) -printf '%f\0' | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          test -s SHA256SUMS.txt
+
       - uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -100,5 +173,6 @@ jobs:
             photoshow_*.deb
             photoshow-*.rpm
             photoshow-*.zip
+            SHA256SUMS.txt
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, 'rc') }}

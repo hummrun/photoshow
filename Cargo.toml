@@ -5,8 +5,8 @@ edition = "2024"
 rust-version = "1.95"
 description = "Fast photo viewer with light non-destructive editing."
 license = "MIT"
-homepage = "https://github.com/raillen/photoshow"
-repository = "https://github.com/raillen/photoshow"
+homepage = "https://github.com/wasd-lat/photoshow"
+repository = "https://github.com/wasd-lat/photoshow"
 
 [dependencies]
 eframe = "0.36"
@@ -14,7 +14,6 @@ egui = "0.36"
 egui-dropdown = "0.16"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
 rfd = "0.17"
-kamadak-exif = "0.6"
 ignore = "0.4"
 anyhow = "1"
 thiserror = "2"

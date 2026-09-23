@@ -1,0 +1,26 @@
+{
+  "generated_by": {
+    "prumo": "0.6.0"
+  },
+  "recipes": [
+    "documentation-refactor",
+    "feature-standard",
+    "ui-feature",
+    "ui-review"
+  ],
+  "reasons": {
+    "documentation-refactor": [
+      "skill-match"
+    ],
+    "feature-standard": [
+      "bundle:desktop"
+    ],
+    "ui-feature": [
+      "bundle:desktop",
+      "skill-match"
+    ],
+    "ui-review": [
+      "skill-match"
+    ]
+  }
+}

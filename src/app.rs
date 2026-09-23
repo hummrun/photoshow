@@ -5,15 +5,22 @@
 //! proporção opcional, Enter aplica), undo/redo (Ctrl+Z/Y), Salvar e
 //! Salvar como (thread, qualidade JPEG configurável).
 
+mod browser;
+mod filmstrip;
+mod viewer;
+
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::config::{AppConfig, THEMES};
-use crate::editor::{CropRect, EditorStack, bake, save_baked};
-use crate::fs_browser::{self, PhotoPath, ScanOptions, ScanResult};
+use crate::editor::{CropRect, EditorStack, bake, save_baked_atomic};
+use crate::fs_browser::{self, PhotoPath, ScanController, ScanOptions, ScanResult};
 use crate::icons::{self, labeled};
 use crate::image_store::{ImageStore, LoadState};
+use crate::media::decoder::decode_full_photo;
+use crate::platform;
 use crate::thumbs::ThumbCache;
+use crate::ui::theme;
 
 /// Opções do filtro de formato (dropdown da toolbar).
 const FORMAT_FILTERS: &[&str] = &["Todas", "JPG", "PNG", "WebP", "TIFF", "BMP", "GIF"];
@@ -40,6 +47,11 @@ struct SaveMsg {
     note: String,
     /// Arquivo sobrescrito: recarregar do disco e limpar o editor.
     reload: Option<PathBuf>,
+}
+
+/// Resultado assíncrono de cópia de imagem para o clipboard.
+struct CopyMsg {
+    note: String,
 }
 
 /// Alças de redimensionamento do crop.
@@ -183,65 +195,6 @@ fn enforce_aspect(anchor: egui::Pos2, pointer: egui::Pos2, ratio: Option<f32>) -
     )
 }
 
-/// Copia texto para o clipboard do SO.
-fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
-    arboard::Clipboard::new()
-        .map_err(|e| format!("clipboard: {e}"))?
-        .set_text(text.to_owned())
-        .map_err(|e| format!("clipboard: {e}"))
-}
-
-/// Copia a imagem (RGBA) para o clipboard do SO.
-fn copy_image_to_clipboard(img: &image::DynamicImage) -> Result<(), String> {
-    let rgba = img.to_rgba8();
-    let data = arboard::ImageData {
-        width: rgba.width() as usize,
-        height: rgba.height() as usize,
-        bytes: rgba.into_raw().into(),
-    };
-    arboard::Clipboard::new()
-        .map_err(|e| format!("clipboard: {e}"))?
-        .set_image(data)
-        .map_err(|e| format!("clipboard: {e}"))
-}
-
-/// Revela o arquivo no gerenciador do SO (mais nativo possível).
-fn reveal_in_folder(path: &Path) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path.display()))
-            .status()
-            .map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let ok = std::process::Command::new("open")
-            .arg("-R")
-            .arg(path)
-            .status()
-            .map_err(|e| e.to_string())?;
-        return ok
-            .success()
-            .then_some(())
-            .ok_or_else(|| String::from("open -R falhou"));
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        let parent = path
-            .parent()
-            .ok_or_else(|| String::from("pasta inválida"))?;
-        let ok = std::process::Command::new("xdg-open")
-            .arg(parent)
-            .status()
-            .map_err(|e| e.to_string())?;
-        ok.success()
-            .then_some(())
-            .ok_or_else(|| String::from("xdg-open falhou"))
-    }
-}
-
 /// Abas do dock (painéis redimensionáveis arrastando bordas e abas).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DockTab {
@@ -287,6 +240,9 @@ pub struct PhotoShowApp {
     save_tx: Sender<SaveMsg>,
     save_rx: Receiver<SaveMsg>,
     saving: bool,
+    copy_tx: Sender<CopyMsg>,
+    copy_rx: Receiver<CopyMsg>,
+    copying: bool,
     rename_open: bool,
     rename_buf: String,
     settings_open: bool,
@@ -295,11 +251,14 @@ pub struct PhotoShowApp {
     maximized: bool,
     saved_dock: Option<egui_dock::DockState<DockTab>>,
     /// Varredura em andamento (fora da thread da UI).
+    scanner: ScanController,
     scan_rx: Option<Receiver<ScanResult>>,
     scan_seq: u64,
     scanning: Option<PathBuf>,
     /// Foto a preservar ao aplicar resultado (rescan com mesmas fotos).
     preserve_on_scan: Option<PathBuf>,
+    /// Intervalo [start, end) realmente visível na galeria neste frame.
+    thumb_viewport: Option<(usize, usize)>,
 }
 
 impl PhotoShowApp {
@@ -308,13 +267,14 @@ impl PhotoShowApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Galeria nativa: 1 passe basta (taffy removido).
         cc.egui_ctx.options_mut(|o| {
-            o.max_passes = std::num::NonZeroUsize::new(1).expect("1 > 0");
+            o.max_passes = std::num::NonZeroUsize::new(1).unwrap_or(std::num::NonZeroUsize::MIN);
         });
         // Ícones Phosphor como fallback da fonte proporcional.
         let mut fonts = egui::FontDefinitions::default();
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
         cc.egui_ctx.set_fonts(fonts);
         let (save_tx, save_rx) = mpsc::channel();
+        let (copy_tx, copy_rx) = mpsc::channel();
         let mut app = Self {
             cfg: AppConfig::load(),
             tree_root: None,
@@ -341,18 +301,23 @@ impl PhotoShowApp {
             save_tx,
             save_rx,
             saving: false,
+            copy_tx,
+            copy_rx,
+            copying: false,
             rename_open: false,
             rename_buf: String::new(),
             settings_open: false,
             dock: Self::default_dock(),
             maximized: false,
             saved_dock: None,
+            scanner: ScanController::new(),
             scan_rx: None,
             scan_seq: 0,
             scanning: None,
             preserve_on_scan: None,
+            thumb_viewport: None,
         };
-        app.apply_theme(&cc.egui_ctx);
+        theme::apply(&app.cfg.theme, &cc.egui_ctx);
         // Reabre a última pasta para navegação imediata.
         if app.cfg.open_last_on_startup
             && let Some(dir) = app.cfg.last_folder.clone()
@@ -375,42 +340,6 @@ impl PhotoShowApp {
         // Miniaturas abaixo do visualizador (~20%).
         surface.split_below(viewer_node, 0.80, vec![DockTab::Filmstrip]);
         dock
-    }
-
-    /// Aplica o tema visual configurado (egui-elegance) + ajustes Apple HIG.
-    fn apply_theme(&self, ctx: &egui::Context) {
-        let theme = match self.cfg.theme.as_str() {
-            "charcoal" => elegance::Theme::charcoal(),
-            "frost" => elegance::Theme::frost(),
-            "paper" => elegance::Theme::paper(),
-            _ => elegance::Theme::slate(),
-        };
-        theme.install(ctx);
-        Self::tune_style(ctx);
-    }
-
-    /// Azul de destaque estilo Apple (legível nos temas claro e escuro).
-    const ACCENT: egui::Color32 = egui::Color32::from_rgb(10, 132, 255);
-
-    /// Refinos por cima do tema: cantos, respiro e seleção (Apple HIG).
-    fn tune_style(ctx: &egui::Context) {
-        ctx.all_styles_mut(|s| {
-            s.spacing.item_spacing = egui::Vec2::new(8.0, 6.0);
-            s.spacing.button_padding = egui::Vec2::new(10.0, 6.0);
-            s.visuals.selection.bg_fill = Self::ACCENT;
-            s.visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-            for w in [
-                &mut s.visuals.widgets.noninteractive,
-                &mut s.visuals.widgets.inactive,
-                &mut s.visuals.widgets.hovered,
-                &mut s.visuals.widgets.active,
-                &mut s.visuals.widgets.open,
-            ] {
-                w.corner_radius = egui::CornerRadius::same(8);
-            }
-            s.visuals.window_corner_radius = egui::CornerRadius::same(12);
-            s.visuals.menu_corner_radius = egui::CornerRadius::same(8);
-        });
     }
 
     /// Persiste config; erro vira status (nunca quebra o app).
@@ -456,7 +385,7 @@ impl PhotoShowApp {
         self.scan_seq += 1;
         let opts = self.scan_opts();
         let seq = self.scan_seq;
-        self.scan_rx = Some(fs_browser::scan_dir_async(dir.clone(), opts, seq));
+        self.scan_rx = Some(self.scanner.scan(dir.clone(), opts, seq));
         self.scanning = Some(dir.clone());
         self.preserve_on_scan = preserve;
         self.status = format!("Varrendo {}…", dir.display());
@@ -475,19 +404,30 @@ impl PhotoShowApp {
         self.scan_rx = None;
         self.scanning = None;
         let dir_label = res.dir.display().to_string();
+        if res.errors_seen > 0 {
+            for error in &res.sample_errors {
+                eprintln!("photoshow scan warning: {error}");
+            }
+        }
+        let error_suffix = if res.errors_seen == 0 {
+            String::new()
+        } else {
+            format!(" · {} erro(s) de leitura", res.errors_seen)
+        };
         if res.photos.is_empty() {
             self.status = format!(
-                "Nenhuma imagem em {} ({} arquivos verificados).",
-                dir_label, res.files_seen
+                "Nenhuma imagem em {} ({} arquivos verificados{})",
+                dir_label, res.files_seen, error_suffix
             );
             self.replace_photos(ctx, Vec::new());
             return;
         }
         self.status = format!(
-            "{} fotos em {} ({} arquivos verificados).",
+            "{} fotos em {} ({} arquivos verificados{})",
             res.photos.len(),
             dir_label,
-            res.files_seen
+            res.files_seen,
+            error_suffix
         );
         // Preserva a seleção no rescan (troca de opção de varredura).
         let preserve = self.preserve_on_scan.take().and_then(|p| {
@@ -774,15 +714,14 @@ impl PhotoShowApp {
             .parent()
             .map(|p| p.join(&new_name))
             .unwrap_or_else(|| PathBuf::from(&new_name));
-        // Valida a extensão antes de tocar no disco.
-        if PhotoPath::new(dest.clone()).is_none() {
+        // Valida e materializa o novo handle antes de tocar no disco.
+        let Some(new_photo) = PhotoPath::new(dest.clone()) else {
             self.status = String::from("Use um nome com extensão de imagem (.jpg, .png, …).");
             self.rename_open = false;
             return;
-        }
+        };
         match fs_browser::rename_photo(&old_path, &new_name) {
             Ok(dest) => {
-                let new_photo = PhotoPath::new(dest.clone()).expect("extensão validada");
                 for list in [&mut self.photos, &mut self.visible] {
                     for p in list.iter_mut() {
                         if p.path() == old_path {
@@ -802,8 +741,12 @@ impl PhotoShowApp {
     // --- Salvamento (thread) ---
 
     fn start_save(&mut self, ctx: &egui::Context, dest: PathBuf, overwrite: bool) {
-        let (Some(full), Some(base)) = (self.store.full_image(), self.store.display_base_dims())
-        else {
+        let (Some(source), Some(base)) = (
+            self.current
+                .as_ref()
+                .map(|photo| photo.path().to_path_buf()),
+            self.store.display_base_dims(),
+        ) else {
             self.status = String::from("Nada para salvar.");
             return;
         };
@@ -814,14 +757,22 @@ impl PhotoShowApp {
         self.saving = true;
         self.status = String::from("Salvando…");
         std::thread::spawn(move || {
-            let baked = bake(&full, base, &state);
-            let msg = match save_baked(&baked, &dest, quality) {
-                Ok(()) => SaveMsg {
-                    note: format!("Salvo em {}", dest.display()),
-                    reload: overwrite.then_some(dest),
-                },
-                Err(e) => SaveMsg {
-                    note: format!("Falha ao salvar: {e}"),
+            let msg = match decode_full_photo(&source) {
+                Ok(full) => {
+                    let baked = bake(&full, base, &state);
+                    match save_baked_atomic(&baked, &source, &dest, quality) {
+                        Ok(report) => SaveMsg {
+                            note: format!("Salvo em {}{}", dest.display(), report.status_suffix()),
+                            reload: overwrite.then_some(dest),
+                        },
+                        Err(error) => SaveMsg {
+                            note: format!("Falha ao salvar: {error}"),
+                            reload: None,
+                        },
+                    }
+                }
+                Err(error) => SaveMsg {
+                    note: format!("Falha ao decodificar original para salvar: {error}"),
                     reload: None,
                 },
             };
@@ -889,18 +840,26 @@ impl PhotoShowApp {
             }
         }
     }
+
+    fn poll_copies(&mut self) {
+        while let Ok(msg) = self.copy_rx.try_recv() {
+            self.copying = false;
+            self.status = msg.note;
+        }
+    }
 }
 
 impl eframe::App for PhotoShowApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let _ = self.store.poll(ui.ctx());
         self.poll_saves(ui.ctx());
+        self.poll_copies();
         self.poll_scans(ui.ctx());
         if let Some(s) = self.sel {
             let max_bytes = self.cfg.prefetch_max_mb * 1024 * 1024;
             self.store.ensure_prefetched(&self.visible, s, max_bytes);
         }
-        self.thumbs.update(ui.ctx(), &self.visible, self.sel);
+        self.thumb_viewport = None;
 
         // Aspect do crop trocado no dropdown: reaplica ao rect existente.
         if self.crop_aspect_name != self.applied_aspect {
@@ -1109,7 +1068,8 @@ impl eframe::App for PhotoShowApp {
                         LoadState::Empty => String::new(),
                     };
                     let saving = if self.saving { " · salvando…" } else { "" };
-                    ui.label(format!("{pos}  {}  {detail}{saving}", self.status));
+                    let copying = if self.copying { " · copiando…" } else { "" };
+                    ui.label(format!("{pos}  {}  {detail}{saving}{copying}", self.status));
                 });
             });
 
@@ -1128,6 +1088,9 @@ impl eframe::App for PhotoShowApp {
 
         self.show_rename_window(ui);
         self.show_settings_window(ui);
+
+        self.thumbs
+            .update(ui.ctx(), &self.visible, self.thumb_viewport, self.sel);
     }
 }
 
@@ -1167,67 +1130,6 @@ impl egui_dock::TabViewer for PhotoShowApp {
 }
 
 impl PhotoShowApp {
-    /// Conteúdo da aba Visualizador (placeholder, erro amigável ou viewer).
-    fn viewer_tab_content(&mut self, ui: &mut egui::Ui) {
-        // Botão flutuante para sair do modo maximizado.
-        if self.maximized {
-            egui::Window::new("restore_panels")
-                .anchor(egui::Align2::CENTER_TOP, egui::Vec2::new(0.0, 8.0))
-                .collapsible(false)
-                .resizable(false)
-                .title_bar(false)
-                .show(ui.ctx(), |ui| {
-                    if ui
-                        .button(labeled(icons::P::SQUARES_FOUR, "Restaurar painéis"))
-                        .on_hover_text("F9")
-                        .clicked()
-                    {
-                        self.toggle_maximize();
-                    }
-                });
-        }
-        match self.store.state() {
-            LoadState::Empty => {
-                ui.centered_and_justified(|ui| {
-                    ui.label(
-                        "Nenhuma foto — abra uma pasta ou fixe uma favorita. (F11 = fullscreen)",
-                    );
-                });
-            }
-            LoadState::Loading => {
-                ui.centered_and_justified(|ui| {
-                    ui.spinner();
-                });
-            }
-            LoadState::Failed(e) => {
-                // Card neutro (nada vermelho gritando): detalhe vai para a statusbar.
-                self.status = format!("Falha ao carregar: {e}");
-                ui.centered_and_justified(|ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(20.0);
-                        ui.label(
-                            egui::RichText::new(icons::P::IMAGE_BROKEN)
-                                .size(40.0)
-                                .color(ui.visuals().weak_text_color()),
-                        );
-                        ui.add_space(8.0);
-                        ui.strong("Não foi possível abrir esta imagem");
-                        ui.weak("arquivo ilegível, incompleto ou corrompido");
-                        ui.add_space(8.0);
-                        ui.weak("← → para continuar navegando");
-                    });
-                });
-            }
-            LoadState::Loaded {
-                texture,
-                display_px,
-                ..
-            } => {
-                self.show_viewer(ui, &texture, display_px);
-            }
-        }
-    }
-
     /// Cabeçalho de seção estilo Finder: versalete cinza, compacto.
     fn section_header(ui: &mut egui::Ui, text: &str) {
         ui.add_space(2.0);
@@ -1238,252 +1140,6 @@ impl PhotoShowApp {
                 .color(ui.visuals().weak_text_color()),
         );
         ui.add_space(2.0);
-    }
-
-    /// Painel esquerdo: favoritas, árvore e lista de arquivos.
-    /// Sem scroll externo: a árvore tem altura limitada e a lista de fotos
-    /// ocupa todo o espaço restante.
-    fn show_browser(&mut self, ui: &mut egui::Ui) {
-        Self::section_header(ui, "Favoritas");
-        if self.cfg.favorites.is_empty() {
-            ui.weak("Nenhuma pasta fixada.");
-        }
-        let weak = ui.visuals().weak_text_color();
-        let mut unpin: Option<PathBuf> = None;
-        let mut open_fav: Option<PathBuf> = None;
-        for fav in &self.cfg.favorites {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(icons::P::FOLDER).size(13.0).color(weak));
-                let name = fav
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| fav.display().to_string());
-                if ui
-                    .selectable_label(self.current_dir.as_ref() == Some(fav), name)
-                    .on_hover_text(fav.display().to_string())
-                    .clicked()
-                {
-                    open_fav = Some(fav.clone());
-                }
-                if ui
-                    .small_button(icons::P::X)
-                    .on_hover_text("Desafixar")
-                    .clicked()
-                {
-                    unpin = Some(fav.clone());
-                }
-            });
-        }
-        if let Some(dir) = unpin {
-            self.cfg.toggle_favorite(&dir);
-            self.persist();
-        }
-        if let Some(dir) = open_fav {
-            self.open_dir_path(ui.ctx(), dir);
-            return;
-        }
-        ui.separator();
-
-        if self.tree_root.is_some() {
-            let root_name = self
-                .tree_root
-                .as_ref()
-                .map(|r| r.name())
-                .unwrap_or_default();
-            let pinned = self
-                .current_dir
-                .as_ref()
-                .map(|d| self.cfg.is_favorite(d))
-                .unwrap_or(false);
-            let mut pin_toggle = false;
-            Self::section_header(ui, "Pasta atual");
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(icons::P::FOLDER_OPEN)
-                        .size(13.0)
-                        .color(weak),
-                );
-                ui.strong(root_name);
-                let star = egui::RichText::new(icons::P::STAR).color(if pinned {
-                    egui::Color32::YELLOW
-                } else {
-                    weak
-                });
-                if ui
-                    .small_button(star)
-                    .on_hover_text("Fixar/desafixar pasta atual")
-                    .clicked()
-                {
-                    pin_toggle = true;
-                }
-            });
-            if pin_toggle && let Some(dir) = self.current_dir.clone() {
-                let fixed = self.cfg.toggle_favorite(&dir);
-                self.persist();
-                self.status = if fixed {
-                    format!("Pasta fixada: {}", dir.display())
-                } else {
-                    String::from("Pasta desafixada.")
-                };
-            }
-            Self::section_header(ui, "Subpastas");
-            let tree_h = (ui.available_height() * 0.34).clamp(90.0, 280.0);
-            let action = egui::ScrollArea::vertical()
-                .max_height(tree_h)
-                .show(ui, |ui| {
-                    Self::show_node(
-                        ui,
-                        self.tree_root.as_mut().expect("root"),
-                        self.current_dir.as_ref(),
-                        0,
-                        self.cfg.show_hidden_folders,
-                    )
-                })
-                .inner;
-            match action {
-                Some(TreeAction::Toggle(i)) => {
-                    if let Some(root) = self.tree_root.as_mut() {
-                        Self::toggle_node(root, i);
-                    }
-                }
-                Some(TreeAction::Open(dir)) => {
-                    self.current_dir = Some(dir.clone());
-                    self.load_folder_contents(ui.ctx(), &dir);
-                }
-                None => {}
-            }
-        } else {
-            ui.weak("Nenhuma pasta aberta.");
-        }
-        ui.separator();
-
-        ui.horizontal(|ui| {
-            Self::section_header(ui, &format!("Fotos ({})", self.visible.len()));
-            if self.scanning.is_some() {
-                ui.spinner();
-            }
-        });
-        // Lista virtualizada preenchendo o restante: 50k fotos custam ~40 linhas.
-        let clicked = egui::ScrollArea::vertical()
-            .show_rows(ui, 24.0, self.visible.len(), |ui, range| {
-                let mut clicked: Option<(usize, PhotoPath)> = None;
-                for i in range {
-                    let photo = &self.visible[i];
-                    if ui
-                        .selectable_label(Some(i) == self.sel, photo.display_name())
-                        .clicked()
-                    {
-                        clicked = Some((i, photo.clone()));
-                    }
-                }
-                clicked
-            })
-            .inner;
-        if let Some((i, p)) = clicked {
-            self.select_photo(ui.ctx(), i, p);
-        }
-    }
-
-    /// Renderiza um nó da árvore; retorna a ação do usuário (índice global).
-    fn show_node(
-        ui: &mut egui::Ui,
-        node: &mut DirNode,
-        current: Option<&PathBuf>,
-        depth: usize,
-        show_hidden: bool,
-    ) -> Option<TreeAction> {
-        Self::show_node_inner(ui, node, current, depth, show_hidden, &mut 0)
-    }
-
-    fn show_node_inner(
-        ui: &mut egui::Ui,
-        node: &mut DirNode,
-        current: Option<&PathBuf>,
-        depth: usize,
-        show_hidden: bool,
-        counter: &mut usize,
-    ) -> Option<TreeAction> {
-        let my_idx = *counter;
-        *counter += 1;
-        let mut action = None;
-        let subdirs = || {
-            fs_browser::list_subdirs(&node.path)
-                .into_iter()
-                .filter(|p| show_hidden || !fs_browser::is_hidden(p))
-        };
-        ui.horizontal(|ui| {
-            ui.add_space(depth as f32 * 12.0);
-            let kids = subdirs().next().is_some() || node.children.is_some();
-            if kids {
-                let glyph = if node.expanded {
-                    icons::P::CARET_DOWN
-                } else {
-                    icons::P::CARET_RIGHT
-                };
-                let caret = egui::RichText::new(glyph)
-                    .size(12.0)
-                    .color(ui.visuals().weak_text_color());
-                if ui
-                    .add_sized([18.0, 20.0], egui::Button::new(caret).frame(false))
-                    .clicked()
-                {
-                    action = Some(TreeAction::Toggle(my_idx));
-                }
-            } else {
-                ui.add_space(18.0);
-            }
-            ui.label(
-                egui::RichText::new(icons::P::FOLDER)
-                    .size(13.0)
-                    .color(ui.visuals().weak_text_color()),
-            );
-            if ui
-                .selectable_label(current == Some(&node.path), node.name())
-                .clicked()
-            {
-                action = Some(TreeAction::Open(node.path.clone()));
-            }
-        });
-        if node.expanded {
-            if node.children.is_none() {
-                node.children = Some(subdirs().map(DirNode::new).collect());
-            }
-            if let Some(kids) = node.children.as_mut() {
-                for kid in kids.iter_mut() {
-                    if let Some(a) =
-                        Self::show_node_inner(ui, kid, current, depth + 1, show_hidden, counter)
-                    {
-                        action = Some(a);
-                        break;
-                    }
-                }
-            }
-        }
-        action
-    }
-
-    /// Alterna expandido do n-ésimo nó (pré-ordem).
-    fn toggle_node(root: &mut DirNode, target: usize) {
-        let mut counter = 0;
-        Self::toggle_inner(root, target, &mut counter);
-    }
-
-    fn toggle_inner(node: &mut DirNode, target: usize, counter: &mut usize) -> bool {
-        if *counter == target {
-            node.expanded = !node.expanded;
-            return true;
-        }
-        *counter += 1;
-        if node.expanded
-            && let Some(kids) = node.children.as_mut()
-        {
-            for kid in kids.iter_mut() {
-                if Self::toggle_inner(kid, target, counter) {
-                    return true;
-                }
-            }
-        }
-        false
     }
 
     /// Barra de edição centralizada (segunda linha do topo; arquivo mora no menu).
@@ -1574,235 +1230,6 @@ impl PhotoShowApp {
                 ui.colored_label(egui::Color32::YELLOW, "• editado");
             }
         });
-    }
-
-    /// Viewer central com zoom/pan, gesto de crop e menu de contexto.
-    #[allow(clippy::too_many_lines)]
-    fn show_viewer(
-        &mut self,
-        ui: &mut egui::Ui,
-        texture: &egui::TextureHandle,
-        display_px: egui::Vec2,
-    ) {
-        let avail = ui.available_size();
-        let (rect, response) = ui.allocate_exact_size(avail, egui::Sense::drag());
-
-        // Zoom: scroll do mouse + pinch do trackpad, ancorado no cursor.
-        let mut factor = ui.input(|i| i.zoom_delta());
-        let scroll_y = ui.input(|i| i.smooth_scroll_delta.y);
-        if scroll_y != 0.0 {
-            factor *= 1.0 + scroll_y * 0.0015;
-        }
-        if factor != 1.0 && response.hovered() {
-            let center = rect.center();
-            let cursor = response.hover_pos().unwrap_or(center);
-            let anchor = cursor - center;
-            self.zoom = (self.zoom * factor).clamp(ZOOM_MIN, ZOOM_MAX);
-            self.offset = anchor + (self.offset - anchor) * factor;
-        }
-
-        let fit = (rect.width() / display_px.x).min(rect.height() / display_px.y);
-        let size = display_px * fit * self.zoom;
-        let draw = egui::Rect::from_center_size(rect.center() + self.offset, size);
-        self.last_draw = Some((draw, (display_px.x as u32, display_px.y as u32)));
-
-        if self.crop_mode {
-            self.crop_gesture(&response, &draw);
-        } else {
-            if response.dragged() {
-                self.offset += response.drag_delta();
-            }
-            if response.double_clicked() {
-                self.zoom = 1.0;
-                self.offset = egui::Vec2::ZERO;
-            }
-        }
-
-        let painter = ui.painter_at(rect);
-        painter.image(
-            texture.id(),
-            draw,
-            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
-            egui::Color32::WHITE,
-        );
-
-        // Overlay do crop: escurece fora + borda + gizmos.
-        if self.crop_mode
-            && let Some(cr) = self.crop_rect
-        {
-            let cr = cr.intersect(draw);
-            let dim = egui::Color32::from_black_alpha(140);
-            painter.rect_filled(
-                egui::Rect::from_two_pos(rect.min, egui::Pos2::new(cr.min.x, rect.max.y)),
-                0.0,
-                dim,
-            );
-            painter.rect_filled(
-                egui::Rect::from_two_pos(egui::Pos2::new(cr.max.x, rect.min.y), rect.max),
-                0.0,
-                dim,
-            );
-            painter.rect_filled(
-                egui::Rect::from_two_pos(
-                    egui::Pos2::new(cr.min.x, rect.min.y),
-                    egui::Pos2::new(cr.max.x, cr.min.y),
-                ),
-                0.0,
-                dim,
-            );
-            let top = cr.max.y.min(rect.max.y);
-            painter.rect_filled(
-                egui::Rect::from_two_pos(
-                    egui::Pos2::new(cr.min.x, top),
-                    egui::Pos2::new(cr.max.x, rect.max.y),
-                ),
-                0.0,
-                dim,
-            );
-            painter.rect_stroke(
-                cr,
-                0.0,
-                egui::Stroke::new(2.0, egui::Color32::WHITE),
-                egui::StrokeKind::Outside,
-            );
-            for h in Handle::all() {
-                let p = h.point(&cr);
-                let sq = egui::Rect::from_center_size(p, egui::Vec2::splat(9.0));
-                painter.rect_filled(sq, 2.0, egui::Color32::WHITE);
-                painter.rect_stroke(
-                    sq,
-                    2.0,
-                    egui::Stroke::new(1.5, egui::Color32::BLACK),
-                    egui::StrokeKind::Outside,
-                );
-            }
-        }
-
-        // Menu de contexto (botão direito) sobre a imagem.
-        let mut action: Option<ImgAction> = None;
-        response.context_menu(|ui| {
-            if ui
-                .button(labeled(icons::P::CLIPBOARD, "Copiar caminho"))
-                .clicked()
-            {
-                action = Some(ImgAction::CopyPath);
-                ui.close();
-            }
-            if ui
-                .button(labeled(icons::P::FILE_IMAGE, "Copiar imagem"))
-                .clicked()
-            {
-                action = Some(ImgAction::CopyImage);
-                ui.close();
-            }
-            ui.separator();
-            if ui
-                .button(labeled(
-                    icons::P::ARROW_SQUARE_OUT,
-                    "Abrir com aplicativo padrão",
-                ))
-                .clicked()
-            {
-                action = Some(ImgAction::OpenDefault);
-                ui.close();
-            }
-            if ui
-                .button(labeled(icons::P::FOLDER_OPEN, "Mostrar na pasta"))
-                .clicked()
-            {
-                action = Some(ImgAction::Reveal);
-                ui.close();
-            }
-            ui.separator();
-            if ui
-                .button(labeled(icons::P::PENCIL_LINE, "Renomear…"))
-                .clicked()
-            {
-                action = Some(ImgAction::Rename);
-                ui.close();
-            }
-        });
-        if let Some(a) = action {
-            self.run_img_action(a);
-        }
-    }
-
-    /// Máquina de estados do gesto de crop (novo / mover / gizmo).
-    fn crop_gesture(&mut self, response: &egui::Response, draw: &egui::Rect) {
-        if response.drag_started()
-            && let Some(p) = response.hover_pos()
-        {
-            if let Some(r) = self.crop_rect {
-                if let Some((_, anchor)) = hit_handle(&r, p) {
-                    self.crop_drag = Some(CropDrag::Resize(anchor));
-                } else if r.contains(p) {
-                    self.crop_drag = Some(CropDrag::Move(p - r.min));
-                } else {
-                    self.crop_drag = Some(CropDrag::New(p));
-                    self.crop_rect = None;
-                }
-            } else {
-                self.crop_drag = Some(CropDrag::New(p));
-            }
-        }
-        if response.dragged()
-            && let Some(hover) = response.hover_pos()
-        {
-            let ratio = self.crop_ratio();
-            match self.crop_drag {
-                Some(CropDrag::New(a)) => {
-                    self.crop_rect = Some(enforce_aspect(a, hover, ratio).intersect(*draw));
-                }
-                Some(CropDrag::Move(off)) => {
-                    if let Some(r) = self.crop_rect {
-                        let size = r.size();
-                        let min = (hover - off).clamp(draw.min, draw.max - size);
-                        self.crop_rect = Some(egui::Rect::from_min_size(min, size));
-                    }
-                }
-                Some(CropDrag::Resize(anchor)) => {
-                    self.crop_rect = Some(enforce_aspect(anchor, hover, ratio).intersect(*draw));
-                }
-                None => {}
-            }
-        }
-        if response.drag_stopped() {
-            self.crop_drag = None;
-        }
-    }
-
-    /// Executa a ação do menu de contexto.
-    fn run_img_action(&mut self, action: ImgAction) {
-        let Some(cur) = self.current.clone() else {
-            return;
-        };
-        match action {
-            ImgAction::CopyPath => {
-                let s = cur.path().display().to_string();
-                match copy_text_to_clipboard(&s) {
-                    Ok(()) => self.status = String::from("Caminho copiado."),
-                    Err(e) => self.status = e,
-                }
-            }
-            ImgAction::CopyImage => match self.store.full_image() {
-                Some(img) => match copy_image_to_clipboard(&img) {
-                    Ok(()) => self.status = String::from("Imagem copiada."),
-                    Err(e) => self.status = e,
-                },
-                None => self.status = String::from("Imagem ainda carregando."),
-            },
-            ImgAction::OpenDefault => {
-                if let Err(e) = open::that(cur.path()) {
-                    self.status = format!("Falha ao abrir: {e}");
-                }
-            }
-            ImgAction::Reveal => {
-                if let Err(e) = reveal_in_folder(cur.path()) {
-                    self.status = e;
-                }
-            }
-            ImgAction::Rename => self.open_rename(),
-        }
     }
 
     /// Modal de renomear (F2, painel, menu de contexto).
@@ -1898,7 +1325,7 @@ impl PhotoShowApp {
                 changed |= ui
                     .add(
                         egui::Slider::new(&mut self.cfg.prefetch_max_mb, 0..=256)
-                            .text("Prefetch até (MB, 0 = off)"),
+                            .text("Prefetch RAM (MB, 0 = off)"),
                     )
                     .changed();
                 self.cfg.prefetch_max_mb = self.cfg.prefetch_max_mb.min(1024);
@@ -1917,7 +1344,7 @@ impl PhotoShowApp {
                     );
                     if self.cfg.theme != before {
                         if THEMES.contains(&self.cfg.theme.as_str()) {
-                            self.apply_theme(ui.ctx());
+                            theme::apply(&self.cfg.theme, ui.ctx());
                         } else {
                             self.cfg.theme = before;
                         }
@@ -1942,125 +1369,6 @@ impl PhotoShowApp {
         }
         if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) && !self.rename_open {
             self.settings_open = false;
-        }
-    }
-
-    /// Conteúdo da aba Miniaturas (taffy flex row com scroll).
-    /// Sem wrapper de Panel: no dock o contêiner é a própria aba.
-    /// Galeria de miniaturas: grade fluida que se adapta à largura da aba.
-    /// Scroll nativo (sem taffy), tamanho configurável, duplo-clique maximiza.
-    fn show_filmstrip_content(&mut self, ui: &mut egui::Ui) {
-        if self.visible.is_empty() {
-            ui.weak("Nenhuma foto.");
-            return;
-        }
-        if !self.cfg.show_filmstrip {
-            ui.weak("Galeria desativada — ative em Config.");
-            return;
-        }
-        // Cabeçalho slim: controle de tamanho proporcional.
-        ui.horizontal(|ui| {
-            ui.weak("Tamanho:");
-            if ui
-                .small_button(icons::P::MINUS)
-                .on_hover_text("Diminuir miniaturas")
-                .clicked()
-            {
-                self.set_thumb_size(self.cfg.thumb_size - 16.0);
-            }
-            let mut size = self.cfg.thumb_size;
-            if ui
-                .add(egui::Slider::new(&mut size, 48.0..=192.0).show_value(false))
-                .changed()
-            {
-                self.set_thumb_size(size);
-            }
-            if ui
-                .small_button(icons::P::PLUS)
-                .on_hover_text("Aumentar miniaturas")
-                .clicked()
-            {
-                self.set_thumb_size(self.cfg.thumb_size + 16.0);
-            }
-            ui.weak(format!("{:.0}px", self.cfg.thumb_size));
-        });
-        ui.separator();
-
-        let cell = self.cfg.thumb_size;
-        let gap = 8.0;
-        let cols = ((ui.available_width() + gap) / (cell + gap))
-            .floor()
-            .max(1.0) as usize;
-        let sel = self.sel;
-        // Janela ao redor da seleção (grade grande demais trava o frame).
-        let (lo, hi) = match sel {
-            Some(s) => {
-                let lo = s.saturating_sub(300);
-                let hi = (s + 300).min(self.visible.len().saturating_sub(1));
-                (lo, hi)
-            }
-            None => (0, self.visible.len().saturating_sub(1).min(599)),
-        };
-        let mut clicked: Option<(usize, PhotoPath, bool)> = None;
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            egui::Grid::new("strip_grid")
-                .spacing([gap, gap])
-                .show(ui, |ui| {
-                    for (k, photo) in self.visible[lo..=hi].iter().enumerate() {
-                        let idx = lo + k;
-                        let selected = Some(idx) == sel;
-                        match self.thumbs.get(photo.path()) {
-                            Some(tex) => {
-                                let img = egui::Image::from_texture(egui::load::SizedTexture::new(
-                                    tex.id(),
-                                    egui::Vec2::splat(cell - 4.0),
-                                ));
-                                let resp = ui.add(egui::Button::new(img).frame(false));
-                                // Borda de seleção explícita (independe do tema).
-                                if selected {
-                                    ui.painter().rect_stroke(
-                                        resp.rect.expand(2.0),
-                                        8.0,
-                                        egui::Stroke::new(2.5, Self::ACCENT),
-                                        egui::StrokeKind::Outside,
-                                    );
-                                }
-                                if resp.clicked() {
-                                    clicked = Some((idx, photo.clone(), resp.double_clicked()));
-                                }
-                            }
-                            None => {
-                                let (r, resp) = ui.allocate_exact_size(
-                                    egui::Vec2::splat(cell - 4.0),
-                                    egui::Sense::click(),
-                                );
-                                ui.painter()
-                                    .rect_filled(r, 6.0, egui::Color32::from_gray(42));
-                                if selected {
-                                    ui.painter().rect_stroke(
-                                        r.expand(2.0),
-                                        8.0,
-                                        egui::Stroke::new(2.5, Self::ACCENT),
-                                        egui::StrokeKind::Outside,
-                                    );
-                                }
-                                if resp.clicked() {
-                                    clicked = Some((idx, photo.clone(), resp.double_clicked()));
-                                }
-                            }
-                        }
-                        if (k + 1) % cols == 0 {
-                            ui.end_row();
-                        }
-                    }
-                });
-        });
-        if let Some((i, p, double)) = clicked {
-            self.select_photo(ui.ctx(), i, p);
-            // Duplo-clique maximiza o Visualizador (restaura com F9).
-            if double && !self.maximized {
-                self.toggle_maximize();
-            }
         }
     }
 }
