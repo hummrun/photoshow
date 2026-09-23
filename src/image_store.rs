@@ -5,17 +5,14 @@
 //! immediately after the texture is created.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
-use thiserror::Error;
-
 use crate::editor::EditorState;
-use crate::exif::{apply_orientation, read_orientation};
+use crate::media::decoder::{DecodedPhoto, decode_photo};
 use crate::media::pixels::RgbaFrame;
 
-pub const DISPLAY_MAX_DIM: u32 = 2048;
 const PREFETCH_RADIUS: isize = 2;
 const PREFETCH_CAP: usize = 4;
 const PREFETCH_MAX_INFLIGHT: usize = 2;
@@ -23,45 +20,6 @@ const LOAD_POLL_INTERVAL: Duration = Duration::from_millis(16);
 
 fn decoded_bytes(decoded: &DecodedPhoto) -> u64 {
     decoded.display.as_bytes().len() as u64
-}
-
-#[derive(Debug, Error)]
-pub enum LoadError {
-    #[error("io: {0}")]
-    Io(String),
-    #[error("decode: {0}")]
-    Decode(String),
-}
-
-impl From<image::ImageError> for LoadError {
-    fn from(error: image::ImageError) -> Self {
-        Self::Decode(error.to_string())
-    }
-}
-
-/// Decode full-resolution pixels only for operations that explicitly need them
-/// (save/export/copy), never as resident viewer state.
-pub fn decode_full_photo(path: &Path) -> Result<image::DynamicImage, LoadError> {
-    let reader = image::ImageReader::open(path).map_err(|error| LoadError::Io(error.to_string()))?;
-    let raw = reader.decode()?;
-    Ok(apply_orientation(raw, read_orientation(path)))
-}
-
-#[derive(Debug)]
-pub struct DecodedPhoto {
-    pub display: image::DynamicImage,
-    pub full_size: (u32, u32),
-}
-
-pub fn decode_photo(path: &Path) -> Result<DecodedPhoto, LoadError> {
-    let full = decode_full_photo(path)?;
-    let full_size = (full.width(), full.height());
-    let display = if full.width().max(full.height()) > DISPLAY_MAX_DIM {
-        full.thumbnail(DISPLAY_MAX_DIM, DISPLAY_MAX_DIM)
-    } else {
-        full
-    };
-    Ok(DecodedPhoto { display, full_size })
 }
 
 struct LoadRequest {
@@ -374,55 +332,3 @@ impl Default for ImageStore {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn write_test_png(dir: &Path, name: &str, width: u32, height: u32) -> PathBuf {
-        let image = image::RgbImage::from_fn(width, height, |x, y| {
-            image::Rgb([(x % 256) as u8, (y % 256) as u8, 128])
-        });
-        let path = dir.join(name);
-        image.save(&path).expect("save png");
-        path
-    }
-
-    #[test]
-    fn decode_small_image_keeps_only_display_sized_pixels() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = write_test_png(dir.path(), "s.png", 32, 24);
-        let decoded = decode_photo(&path).expect("decode");
-
-        assert_eq!(decoded.full_size, (32, 24));
-        assert_eq!(
-            (decoded.display.width(), decoded.display.height()),
-            (32, 24)
-        );
-        assert_eq!(decoded_bytes(&decoded), decoded.display.as_bytes().len() as u64);
-    }
-
-    #[test]
-    fn decode_large_image_downscales_display() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = write_test_png(dir.path(), "big.png", 3000, 2000);
-        let decoded = decode_photo(&path).expect("decode");
-
-        assert_eq!(decoded.full_size, (3000, 2000));
-        assert!(decoded.display.width().max(decoded.display.height()) <= DISPLAY_MAX_DIM);
-    }
-
-    #[test]
-    fn full_decode_is_available_only_on_demand() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = write_test_png(dir.path(), "full.png", 64, 48);
-        let decoded = decode_full_photo(&path).expect("full decode");
-
-        assert_eq!((decoded.width(), decoded.height()), (64, 48));
-    }
-
-    #[test]
-    fn decode_missing_file_errors() {
-        let error = decode_photo(Path::new("/nao/existe/foto.png")).expect_err("deveria falhar");
-        assert!(matches!(error, LoadError::Io(_)));
-    }
-}
