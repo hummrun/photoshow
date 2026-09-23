@@ -258,7 +258,6 @@ pub fn save_baked(
     }
 }
 
-
 /// Grava primeiro em arquivo temporário no mesmo diretório e só então promove
 /// o resultado para o destino. O original nunca é truncado antes do encode
 /// terminar com sucesso.
