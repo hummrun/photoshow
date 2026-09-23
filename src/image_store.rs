@@ -331,4 +331,3 @@ impl Default for ImageStore {
         Self::new()
     }
 }
-
