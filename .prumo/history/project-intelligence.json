@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-09-23T06:32:00Z",
+  "updated_at": "2026-09-23T06:34:00Z",
   "summary": {
     "tasks": 2,
     "input_tokens": 0,
@@ -32,21 +32,6 @@
         "entries_10000_ms": 13,
         "entries_50000_ms": 68,
         "process_peak_rss_kib": 95048,
-        "release_binary_bytes": 22450136
-      }
-    },
-    {
-      "id": "P01-synthetic-scan-baseline",
-      "status": "completed",
-      "evidence": {
-        "commit": "ab1de4a20ffe0b0b2c6d44d62891faddc48004d8",
-        "workflow_run": 35826785654,
-        "scan_ms": {
-          "1000": 2,
-          "10000": 13,
-          "50000": 68
-        },
-        "harness_peak_rss_kib": 95048,
         "release_binary_bytes": 22450136
       }
     }
