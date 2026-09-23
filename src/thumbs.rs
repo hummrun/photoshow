@@ -11,7 +11,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::exif::{apply_orientation, read_orientation};
+use crate::media::decoder::decode_full_photo;
 
 pub const THUMB_MAX: u32 = 160;
 const THUMB_MARGIN: usize = 32;
@@ -32,8 +32,7 @@ struct ThumbMsg {
 }
 
 fn decode_thumb(path: &PathBuf) -> Option<egui::ColorImage> {
-    let raw = image::ImageReader::open(path).ok()?.decode().ok()?;
-    let oriented = apply_orientation(raw, read_orientation(path));
+    let oriented = decode_full_photo(path).ok()?;
     let thumb = oriented.thumbnail(THUMB_MAX, THUMB_MAX);
     let rgba = thumb.to_rgba8();
     Some(egui::ColorImage::from_rgba_unmultiplied(
