@@ -14,7 +14,6 @@ egui = "0.36"
 egui-dropdown = "0.16"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
 rfd = "0.17"
-kamadak-exif = "0.6"
 ignore = "0.4"
 anyhow = "1"
 thiserror = "2"
