@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 /// Preferências editáveis no menu ⚙ Config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
+    /// Versão do formato persistido. Configs antigas sem o campo migram para 1.
+    #[serde(default = "default_config_version")]
+    pub version: u32,
     /// Pastas fixadas (navegação rápida).
     #[serde(default)]
     pub favorites: Vec<PathBuf>,
@@ -48,6 +51,10 @@ pub struct AppConfig {
     pub thumb_size: f32,
 }
 
+fn default_config_version() -> u32 {
+    1
+}
+
 fn default_true() -> bool {
     true
 }
@@ -74,6 +81,7 @@ pub const THEMES: &[&str] = &["slate", "charcoal", "frost", "paper"];
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            version: default_config_version(),
             favorites: Vec::new(),
             last_folder: None,
             confirm_overwrite: true,
@@ -111,6 +119,9 @@ impl AppConfig {
     pub fn load_from(path: &Path) -> Option<Self> {
         let text = std::fs::read_to_string(path).ok()?;
         let mut cfg: Self = serde_json::from_str(&text).ok()?;
+        if cfg.version == 0 {
+            cfg.version = default_config_version();
+        }
         cfg.jpeg_quality = cfg.jpeg_quality.clamp(1, 100);
         cfg.prefetch_max_mb = cfg.prefetch_max_mb.min(1024);
         cfg.thumb_size = cfg.thumb_size.clamp(48.0, 192.0);
