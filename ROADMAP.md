@@ -53,7 +53,7 @@ Nenhuma feature grande deve furar os gates desta fase.
 - [x] `platform.rs` separa integração com SO
 - [x] tema separado em `ui/theme.rs`
 - [x] browser/viewer/filmstrip extraídos do monólito `app.rs`
-- [ ] separar decode/media neutros de `image_store` (adapter egui)
+- [x] separar decode/media neutros de `image_store` (adapter egui)
 - [ ] reduzir o estado central restante sem criar abstrações artificiais
 - [ ] reconciliar/regenerar integralmente skills importadas antigas quando o Prumo expuser o fluxo adequado
 - [ ] baseline de acessibilidade por teclado/foco nos fluxos críticos
