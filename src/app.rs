@@ -218,7 +218,7 @@ fn reveal_in_folder(path: &Path) -> Result<(), String> {
             .arg(format!("/select,{}", path.display()))
             .status()
             .map_err(|e| e.to_string())?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(target_os = "macos")]
     {
