@@ -14,7 +14,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::config::{AppConfig, THEMES};
 use crate::editor::{CropRect, EditorStack, bake, save_baked_atomic};
-use crate::fs_browser::{self, PhotoPath, ScanOptions, ScanResult};
+use crate::fs_browser::{self, PhotoPath, ScanController, ScanOptions, ScanResult};
 use crate::icons::{self, labeled};
 use crate::image_store::{ImageStore, LoadState};
 use crate::media::decoder::decode_full_photo;
@@ -251,6 +251,7 @@ pub struct PhotoShowApp {
     maximized: bool,
     saved_dock: Option<egui_dock::DockState<DockTab>>,
     /// Varredura em andamento (fora da thread da UI).
+    scanner: ScanController,
     scan_rx: Option<Receiver<ScanResult>>,
     scan_seq: u64,
     scanning: Option<PathBuf>,
@@ -309,6 +310,7 @@ impl PhotoShowApp {
             dock: Self::default_dock(),
             maximized: false,
             saved_dock: None,
+            scanner: ScanController::new(),
             scan_rx: None,
             scan_seq: 0,
             scanning: None,
@@ -383,7 +385,7 @@ impl PhotoShowApp {
         self.scan_seq += 1;
         let opts = self.scan_opts();
         let seq = self.scan_seq;
-        self.scan_rx = Some(fs_browser::scan_dir_async(dir.clone(), opts, seq));
+        self.scan_rx = Some(self.scanner.scan(dir.clone(), opts, seq));
         self.scanning = Some(dir.clone());
         self.preserve_on_scan = preserve;
         self.status = format!("Varrendo {}…", dir.display());
