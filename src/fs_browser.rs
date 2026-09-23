@@ -105,12 +105,9 @@ impl ScanController {
                     request = newer;
                 }
 
-                let Some((photos, files_seen, errors_seen, sample_errors)) = walk_photos(
-                    &request.dir,
-                    request.opts,
-                    &active_generation,
-                    request.id,
-                ) else {
+                let Some((photos, files_seen, errors_seen, sample_errors)) =
+                    walk_photos(&request.dir, request.opts, &active_generation, request.id)
+                else {
                     continue;
                 };
                 let _ = request.result_tx.send(ScanResult {
