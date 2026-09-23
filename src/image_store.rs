@@ -1,8 +1,8 @@
-//! Cache de imagens: decode em worker dedicado -> textura egui.
+//! Image runtime: bounded decode workers, display cache and egui texture adapter.
 //!
-//! O decode core produz buffers neutros. O egui aparece somente nesta camada de
-//! adaptação/upload. A full-resolution não fica residente: ela é decodificada
-//! sob demanda por operações como save/copy.
+//! Full-resolution pixels are never retained in the viewer cache. The cache keeps
+//! only display-sized CPU images; RGBA upload buffers are transient and dropped
+//! immediately after the texture is created.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -15,7 +15,6 @@ use crate::editor::EditorState;
 use crate::exif::{apply_orientation, read_orientation};
 use crate::media::pixels::RgbaFrame;
 
-/// Maior lado (px) da versão de display.
 pub const DISPLAY_MAX_DIM: u32 = 2048;
 const PREFETCH_RADIUS: isize = 2;
 const PREFETCH_CAP: usize = 4;
@@ -23,10 +22,9 @@ const PREFETCH_MAX_INFLIGHT: usize = 2;
 const LOAD_POLL_INTERVAL: Duration = Duration::from_millis(16);
 
 fn decoded_bytes(decoded: &DecodedPhoto) -> u64 {
-    decoded.display.as_bytes().len() as u64 + decoded.frame.byte_len() as u64
+    decoded.display.as_bytes().len() as u64
 }
 
-/// Erros de carregamento de foto.
 #[derive(Debug, Error)]
 pub enum LoadError {
     #[error("io: {0}")]
@@ -41,27 +39,20 @@ impl From<image::ImageError> for LoadError {
     }
 }
 
-/// Decodifica a imagem completa, aplica orientação EXIF e não cria cópias
-/// permanentes. Use somente em operações que realmente precisam de full-res.
+/// Decode full-resolution pixels only for operations that explicitly need them
+/// (save/export/copy), never as resident viewer state.
 pub fn decode_full_photo(path: &Path) -> Result<image::DynamicImage, LoadError> {
-    let reader = image::ImageReader::open(path).map_err(|e| LoadError::Io(e.to_string()))?;
+    let reader = image::ImageReader::open(path).map_err(|error| LoadError::Io(error.to_string()))?;
     let raw = reader.decode()?;
     Ok(apply_orientation(raw, read_orientation(path)))
 }
 
-/// Foto pronta para o viewer/prefetch. Não contém full-resolution.
 #[derive(Debug)]
 pub struct DecodedPhoto {
     pub display: image::DynamicImage,
-    pub frame: RgbaFrame,
     pub full_size: (u32, u32),
 }
 
-/// Decodifica, orienta e reduz para o limite do viewer.
-///
-/// Para imagens pequenas, a própria imagem orientada vira display em vez de ser
-/// clonada. Para imagens grandes, a full-res existe apenas durante a criação do
-/// thumbnail de display e é liberada antes do resultado entrar no cache.
 pub fn decode_photo(path: &Path) -> Result<DecodedPhoto, LoadError> {
     let full = decode_full_photo(path)?;
     let full_size = (full.width(), full.height());
@@ -70,12 +61,7 @@ pub fn decode_photo(path: &Path) -> Result<DecodedPhoto, LoadError> {
     } else {
         full
     };
-    let frame = RgbaFrame::from_dynamic(&display);
-    Ok(DecodedPhoto {
-        display,
-        frame,
-        full_size,
-    })
+    Ok(DecodedPhoto { display, full_size })
 }
 
 struct LoadRequest {
@@ -90,11 +76,11 @@ struct LoadMsg {
 }
 
 struct PrefetchMsg {
+    generation: u64,
     path: PathBuf,
     result: Option<DecodedPhoto>,
 }
 
-/// Estado visível do carregamento atual.
 pub enum LoadState {
     Empty,
     Loading,
@@ -106,11 +92,6 @@ pub enum LoadState {
     Failed(String),
 }
 
-/// Guarda seleção atual, display CPU e textura GPU.
-///
-/// O loader principal é um único worker. Ao terminar um decode ele drena pedidos
-/// pendentes e processa apenas o mais novo (latest-wins), evitando uma explosão
-/// de threads durante navegação rápida.
 pub struct ImageStore {
     load_tx: Sender<LoadRequest>,
     rx: Receiver<LoadMsg>,
@@ -118,9 +99,10 @@ pub struct ImageStore {
     tex_seq: u64,
     current_id: u64,
     texture: Option<egui::TextureHandle>,
+    base_texture: Option<egui::TextureHandle>,
     display_px: egui::Vec2,
+    base_display_px: egui::Vec2,
     display_img: Option<image::DynamicImage>,
-    display_frame: Option<RgbaFrame>,
     full_px: (u32, u32),
     error: Option<String>,
     has_selection: bool,
@@ -131,6 +113,7 @@ pub struct ImageStore {
     prefetch_bytes: u64,
     prefetch_budget_bytes: u64,
     inflight: HashSet<PathBuf>,
+    prefetch_generation: u64,
 }
 
 impl ImageStore {
@@ -140,6 +123,8 @@ impl ImageStore {
         let (result_tx, result_rx) = mpsc::channel::<LoadMsg>();
         std::thread::spawn(move || {
             while let Ok(mut request) = load_rx.recv() {
+                // A decode that already started cannot be cheaply cancelled, but
+                // queued selections can. Keep only the newest pending request.
                 while let Ok(newer) = load_rx.try_recv() {
                     request = newer;
                 }
@@ -165,9 +150,10 @@ impl ImageStore {
             tex_seq: 0,
             current_id: 0,
             texture: None,
+            base_texture: None,
             display_px: egui::Vec2::ZERO,
+            base_display_px: egui::Vec2::ZERO,
             display_img: None,
-            display_frame: None,
             full_px: (0, 0),
             error: None,
             has_selection: false,
@@ -178,42 +164,58 @@ impl ImageStore {
             prefetch_bytes: 0,
             prefetch_budget_bytes: 0,
             inflight: HashSet::new(),
+            prefetch_generation: 0,
         }
     }
 
-    fn upload_frame(&mut self, ctx: &egui::Context, frame: &RgbaFrame, tag: &str) {
+    fn texture_from_image(
+        &mut self,
+        ctx: &egui::Context,
+        image: &image::DynamicImage,
+        tag: &str,
+    ) -> (egui::TextureHandle, egui::Vec2) {
+        // RgbaFrame is intentionally transient: after upload we retain the
+        // original display-sized DynamicImage and the GPU texture, not a second
+        // RGBA CPU copy.
+        let frame = RgbaFrame::from_dynamic(image);
         self.tex_seq += 1;
-        self.display_px = egui::Vec2::new(frame.width() as f32, frame.height() as f32);
+        let size = egui::Vec2::new(frame.width() as f32, frame.height() as f32);
         let color = egui::ColorImage::from_rgba_unmultiplied(
             [frame.width() as usize, frame.height() as usize],
             frame.bytes(),
         );
-        self.texture = Some(ctx.load_texture(
+        let texture = ctx.load_texture(
             format!("photo-{tag}-{}", self.tex_seq),
             color,
             egui::TextureOptions::LINEAR,
-        ));
+        );
+        (texture, size)
     }
 
-    /// Seleciona foto: consome prefetch imediatamente ou envia ao loader
-    /// latest-wins. A full-resolution não é retida.
+    fn install_base(&mut self, ctx: &egui::Context, decoded: DecodedPhoto, tag: &str) {
+        self.full_px = decoded.full_size;
+        let (texture, size) = self.texture_from_image(ctx, &decoded.display, tag);
+        self.display_px = size;
+        self.base_display_px = size;
+        self.base_texture = Some(texture.clone());
+        self.texture = Some(texture);
+        self.display_img = Some(decoded.display);
+    }
+
     pub fn select(&mut self, ctx: &egui::Context, photo: &crate::fs_browser::PhotoPath) {
         self.next_id += 1;
         let id = self.next_id;
         self.current_id = id;
         self.has_selection = true;
         self.texture = None;
+        self.base_texture = None;
         self.display_img = None;
-        self.display_frame = None;
         self.error = None;
         let path = photo.path().to_path_buf();
 
         if let Some(decoded) = self.prefetch.remove(&path) {
             self.prefetch_bytes = self.prefetch_bytes.saturating_sub(decoded_bytes(&decoded));
-            self.full_px = decoded.full_size;
-            self.upload_frame(ctx, &decoded.frame, "hit");
-            self.display_img = Some(decoded.display);
-            self.display_frame = Some(decoded.frame);
+            self.install_base(ctx, decoded, "prefetch-hit");
             return;
         }
 
@@ -224,9 +226,6 @@ impl ImageStore {
         ctx.request_repaint_after(LOAD_POLL_INTERVAL);
     }
 
-    /// Mantém um pequeno cache de displays vizinhos. O limite é RAM decodificada,
-    /// não tamanho comprimido do arquivo. No máximo dois decodes de prefetch
-    /// ficam simultaneamente em voo.
     pub fn ensure_prefetched(
         &mut self,
         photos: &[crate::fs_browser::PhotoPath],
@@ -242,6 +241,7 @@ impl ImageStore {
             return;
         }
 
+        let generation = self.prefetch_generation;
         for distance in -PREFETCH_RADIUS..=PREFETCH_RADIUS {
             if distance == 0 || self.inflight.len() >= PREFETCH_MAX_INFLIGHT {
                 continue;
@@ -259,14 +259,20 @@ impl ImageStore {
             let tx = self.pre_tx.clone();
             std::thread::spawn(move || {
                 let result = decode_photo(&path).ok();
-                let _ = tx.send(PrefetchMsg { path, result });
+                let _ = tx.send(PrefetchMsg {
+                    generation,
+                    path,
+                    result,
+                });
             });
         }
     }
 
-    /// Drena resultados do loader e do prefetch.
     pub fn poll(&mut self, ctx: &egui::Context) -> bool {
         while let Ok(message) = self.pre_rx.try_recv() {
+            if message.generation != self.prefetch_generation {
+                continue;
+            }
             self.inflight.remove(&message.path);
             if let Some(decoded) = message.result {
                 self.prefetch_bytes += decoded_bytes(&decoded);
@@ -283,12 +289,7 @@ impl ImageStore {
             }
             pending = false;
             match message.result {
-                Ok(decoded) => {
-                    self.full_px = decoded.full_size;
-                    self.upload_frame(ctx, &decoded.frame, "base");
-                    self.display_img = Some(decoded.display);
-                    self.display_frame = Some(decoded.frame);
-                }
+                Ok(decoded) => self.install_base(ctx, decoded, "base"),
                 Err(error) => {
                     self.error = Some(format!("{}: {error}", message.path.display()));
                 }
@@ -315,33 +316,22 @@ impl ImageStore {
         }
     }
 
-    /// Reconstrói o preview editado. O próximo passo de performance é mover esta
-    /// transformação para um worker; o decode e a preparação RGBA já estão fora
-    /// da thread da UI no caminho normal de carregamento.
     pub fn rebuild_preview(&mut self, ctx: &egui::Context, state: &EditorState) {
         let Some(base) = self.display_img.as_ref() else {
             return;
         };
         let edited = crate::editor::apply_to_image(base, state);
-        let frame = RgbaFrame::from_dynamic(&edited);
-        self.upload_frame(ctx, &frame, "preview");
+        let (texture, size) = self.texture_from_image(ctx, &edited, "preview");
+        self.texture = Some(texture);
+        self.display_px = size;
     }
 
-    pub fn restore_base(&mut self, ctx: &egui::Context) {
-        let Some(frame) = self.display_frame.as_ref() else {
+    pub fn restore_base(&mut self, _ctx: &egui::Context) {
+        let Some(texture) = self.base_texture.as_ref() else {
             return;
         };
-        let color = egui::ColorImage::from_rgba_unmultiplied(
-            [frame.width() as usize, frame.height() as usize],
-            frame.bytes(),
-        );
-        self.tex_seq += 1;
-        self.display_px = egui::Vec2::new(frame.width() as f32, frame.height() as f32);
-        self.texture = Some(ctx.load_texture(
-            format!("photo-base-{}", self.tex_seq),
-            color,
-            egui::TextureOptions::LINEAR,
-        ));
+        self.texture = Some(texture.clone());
+        self.display_px = self.base_display_px;
     }
 
     #[must_use]
@@ -370,6 +360,7 @@ impl ImageStore {
     }
 
     pub fn clear_prefetch(&mut self) {
+        self.prefetch_generation = self.prefetch_generation.wrapping_add(1);
         self.prefetch.clear();
         self.prefetch_order.clear();
         self.prefetch_bytes = 0;
@@ -397,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn decode_small_image_keeps_size_without_full_copy() {
+    fn decode_small_image_keeps_only_display_sized_pixels() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = write_test_png(dir.path(), "s.png", 32, 24);
         let decoded = decode_photo(&path).expect("decode");
@@ -407,7 +398,7 @@ mod tests {
             (decoded.display.width(), decoded.display.height()),
             (32, 24)
         );
-        assert_eq!(decoded.frame.byte_len(), 32 * 24 * 4);
+        assert_eq!(decoded_bytes(&decoded), decoded.display.as_bytes().len() as u64);
     }
 
     #[test]
