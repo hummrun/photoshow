@@ -13,7 +13,7 @@ use crate::exif::{apply_orientation, read_orientation};
 /// Maior lado do thumbnail.
 pub const THUMB_MAX: u32 = 160;
 /// Janela ao redor da seleção mantida em cache/enfileirada.
-const THUMB_RADIUS: usize = 25;
+const THUMB_MARGIN: usize = 32;
 /// Teto de texturas; além disso, despeja fora da janela.
 const THUMB_CAP: usize = 200;
 /// Novos jobs por frame (não sufocar a UI).
@@ -82,18 +82,30 @@ impl ThumbCache {
         &mut self,
         ctx: &egui::Context,
         visible: &[crate::fs_browser::PhotoPath],
+        viewport: Option<(usize, usize)>,
         sel: Option<usize>,
     ) {
-        let Some(center) = sel.filter(|_| !visible.is_empty()) else {
-            return;
-        };
-        let (lo, hi) = window_range(visible.len(), center, THUMB_RADIUS);
+        // Sempre drena resultados prontos, mesmo quando a galeria não está visível.
+        let (view_start, view_end) = viewport
+            .map(|(start, end)| (start.min(visible.len()), end.min(visible.len())))
+            .unwrap_or((0, 0));
+        let lo = view_start.saturating_sub(THUMB_MARGIN);
+        let hi_exclusive = view_end.saturating_add(THUMB_MARGIN).min(visible.len());
 
-        let mut candidates: Vec<PathBuf> = visible[lo..=hi]
-            .iter()
-            .map(|p| p.path().to_path_buf())
-            .filter(|p| {
-                !self.cache.contains_key(p) && !self.failed.contains(p) && !self.queued.contains(p)
+        let mut candidate_indices: Vec<usize> = (lo..hi_exclusive).collect();
+        if let Some(selected) = sel.filter(|selected| *selected < visible.len())
+            && !candidate_indices.contains(&selected)
+        {
+            candidate_indices.insert(0, selected);
+        }
+
+        let mut candidates: Vec<PathBuf> = candidate_indices
+            .into_iter()
+            .map(|index| visible[index].path().to_path_buf())
+            .filter(|path| {
+                !self.cache.contains_key(path)
+                    && !self.failed.contains(path)
+                    && !self.queued.contains(path)
             })
             .collect();
         // Baratos primeiro (metadados; falha = por último).
@@ -130,12 +142,15 @@ impl ThumbCache {
         }
 
         if self.cache.len() > THUMB_CAP {
-            let keep: HashSet<PathBuf> = visible[lo..=hi]
+            let mut keep: HashSet<PathBuf> = visible[lo..hi_exclusive]
                 .iter()
-                .map(|p| p.path().to_path_buf())
+                .map(|photo| photo.path().to_path_buf())
                 .collect();
-            self.cache.retain(|p, _| keep.contains(p));
-            self.failed.retain(|p| keep.contains(p));
+            if let Some(selected) = sel.and_then(|index| visible.get(index)) {
+                keep.insert(selected.path().to_path_buf());
+            }
+            self.cache.retain(|path, _| keep.contains(path));
+            self.failed.retain(|path| keep.contains(path));
         }
         if sent > 0 || received > 0 || !self.queued.is_empty() {
             ctx.request_repaint();
