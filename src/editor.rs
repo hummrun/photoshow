@@ -52,10 +52,16 @@ impl EditorState {
 }
 
 /// Pilha de edição com undo/redo (snapshots baratos: 2 campos).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct EditorStack {
     history: Vec<EditorState>,
     future: Vec<EditorState>,
+}
+
+impl Default for EditorStack {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EditorStack {
@@ -71,7 +77,7 @@ impl EditorStack {
     /// Estado atual.
     #[must_use]
     pub fn state(&self) -> EditorState {
-        *self.history.last().expect("histórico nunca vazio")
+        self.history.last().copied().unwrap_or_default()
     }
 
     /// Há edições pendentes?
@@ -135,9 +141,11 @@ impl EditorStack {
 
     /// Desfaz a última operação; `false` se já está limpo.
     pub fn undo(&mut self) -> bool {
-        if self.history.len() > 1 {
-            let cur = self.history.pop().expect("len > 1");
-            self.future.push(cur);
+        if self.history.len() <= 1 {
+            return false;
+        }
+        if let Some(current) = self.history.pop() {
+            self.future.push(current);
             true
         } else {
             false
