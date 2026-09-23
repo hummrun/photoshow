@@ -13,7 +13,9 @@ mod fs_browser;
 mod icons;
 mod image_store;
 mod media;
+mod platform;
 mod thumbs;
+mod ui;
 
 use anyhow::Context;
 
