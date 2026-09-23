@@ -10,12 +10,24 @@
   },
   "project": {
     "name": "photoshow",
-    "type": ["desktop", "desktop-gui"]
+    "type": [
+      "desktop",
+      "desktop-gui"
+    ]
   },
   "stack": {
-    "languages": ["rust"],
-    "runtime": ["eframe", "egui"],
-    "tooling": ["cargo", "rustfmt", "clippy"]
+    "languages": [
+      "rust"
+    ],
+    "runtime": [
+      "eframe",
+      "egui"
+    ],
+    "tooling": [
+      "cargo",
+      "rustfmt",
+      "clippy"
+    ]
   },
   "features": [
     "photo-viewer",
@@ -46,9 +58,16 @@
       "generated": true,
       "public_internal_views": true
     },
-    "audiences": ["user", "developer", "operations", "agent"],
+    "audiences": [
+      "user",
+      "developer",
+      "operations",
+      "agent"
+    ],
     "source_locale": "pt-BR",
-    "locales": ["pt-BR"],
+    "locales": [
+      "pt-BR"
+    ],
     "virtual_chunking": true
   },
   "context": {
@@ -114,16 +133,28 @@
     "orchestrator": "native",
     "autonomy": "controlled",
     "preferred_models": [
-      {"id": "openai/gpt-5.6-sol", "provider": "openai"},
-      {"id": "moonshot/kimi-k3", "provider": "moonshot"},
-      {"id": "deepseek/v4.1-flash", "provider": "deepseek"}
+      {
+        "id": "openai/gpt-5.6-sol",
+        "provider": "openai"
+      },
+      {
+        "id": "moonshot/kimi-k3",
+        "provider": "moonshot"
+      },
+      {
+        "id": "deepseek/v4.1-flash",
+        "provider": "deepseek"
+      }
     ]
   },
   "ui": {
     "interface_map": {
       "enabled": true,
-      "targets": ["developer", "agent"],
-      "derivation": "verify-only",
+      "targets": [
+        "developer",
+        "agent"
+      ],
+      "derivation": "off",
       "path": "docs/ui-ux/interface-map.json"
     }
   }
