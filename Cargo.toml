@@ -5,8 +5,8 @@ edition = "2024"
 rust-version = "1.95"
 description = "Fast photo viewer with light non-destructive editing."
 license = "MIT"
-homepage = "https://github.com/raillen/photoshow"
-repository = "https://github.com/raillen/photoshow"
+homepage = "https://github.com/wasd-lat/photoshow"
+repository = "https://github.com/wasd-lat/photoshow"
 
 [dependencies]
 eframe = "0.36"
