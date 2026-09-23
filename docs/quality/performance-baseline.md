@@ -87,6 +87,12 @@ cargo build --release --locked
 stat -c '%s bytes' target/release/photoshow
 ```
 
+## Recorded baselines
+
+- [2026-09-23 — CI synthetic folder scan](../evidence/performance/2026-09-23-ci-folder-scan.md):
+  1k = 2 ms, 10k = 13 ms, 50k = 68 ms on an Ubuntu hosted runner.
+  This is evidence, **not yet a regression budget**.
+
 ## Evidence format
 
 Store benchmark evidence under `docs/evidence/performance/` as dated Markdown/JSON. Every report must identify:

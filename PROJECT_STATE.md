@@ -29,7 +29,7 @@
 
 ## Verified baseline
 
-Snapshot `c4648d43` passed, on the same commit:
+Snapshot `ab1de4a2` passed, on the same commit:
 
 - Linux: `cargo fmt --check`, strict Clippy, all tests, release build.
 - Windows: strict Clippy, all tests, release build.
@@ -40,7 +40,7 @@ Every later snapshot must pass the same gates before merge.
 
 ## Remaining P01 evidence
 
-- Run and record the 1k/10k/50k folder-scan performance harness.
+- Synthetic 1k/10k/50k scan baseline recorded: **2 / 13 / 68 ms** on the hosted CI runner. See `docs/evidence/performance/2026-09-23-ci-folder-scan.md`.
 - Capture startup/idle RSS and real viewer/gallery frame-time on representative hardware.
 - Exercise the release workflow from an actual prerelease tag, including installer + checksum download.
 
