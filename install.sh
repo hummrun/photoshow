@@ -32,7 +32,7 @@ if [ -n "${PHOTOSHOW_ARCHIVE:-}" ]; then
 else
   if [ -z "${PHOTOSHOW_VERSION:-}" ]; then
     echo "--> descobrindo última release…"
-    PHOTOSHOW_VERSION="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
+    PHOTOSHOW_VERSION="$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=1" \
       | grep -m1 '"tag_name"' | cut -d'"' -f4)"
   fi
   echo "--> versão: $PHOTOSHOW_VERSION"
@@ -44,7 +44,7 @@ else
 
   CHECKSUM_URL="https://github.com/$REPO/releases/download/$PHOTOSHOW_VERSION/SHA256SUMS.txt"
   if curl -fsSL --retry 3 -o "$TMP/SHA256SUMS.txt" "$CHECKSUM_URL"; then
-    expected="$(awk -v file="$TARBALL" '$2 == file || $2 == "*" file { print $1; exit }' "$TMP/SHA256SUMS.txt")"
+    expected="$(awk -v file="$TARBALL" '$2 == file || $2 == "./" file || $2 == "*" file { print $1; exit }' "$TMP/SHA256SUMS.txt")"
     if [ -z "$expected" ]; then
       echo "erro: checksum de $TARBALL não encontrado em SHA256SUMS.txt" >&2
       exit 1
