@@ -13,7 +13,9 @@ use crate::editor::{CropRect, EditorStack, bake, save_baked_atomic};
 use crate::fs_browser::{self, PhotoPath, ScanOptions, ScanResult};
 use crate::icons::{self, labeled};
 use crate::image_store::{ImageStore, LoadState, decode_full_photo};
+use crate::platform;
 use crate::thumbs::ThumbCache;
+use crate::ui::theme;
 
 /// Opções do filtro de formato (dropdown da toolbar).
 const FORMAT_FILTERS: &[&str] = &["Todas", "JPG", "PNG", "WebP", "TIFF", "BMP", "GIF"];
@@ -188,65 +190,6 @@ fn enforce_aspect(anchor: egui::Pos2, pointer: egui::Pos2, ratio: Option<f32>) -
     )
 }
 
-/// Copia texto para o clipboard do SO.
-fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
-    arboard::Clipboard::new()
-        .map_err(|e| format!("clipboard: {e}"))?
-        .set_text(text.to_owned())
-        .map_err(|e| format!("clipboard: {e}"))
-}
-
-/// Copia a imagem (RGBA) para o clipboard do SO.
-fn copy_image_to_clipboard(img: &image::DynamicImage) -> Result<(), String> {
-    let rgba = img.to_rgba8();
-    let data = arboard::ImageData {
-        width: rgba.width() as usize,
-        height: rgba.height() as usize,
-        bytes: rgba.into_raw().into(),
-    };
-    arboard::Clipboard::new()
-        .map_err(|e| format!("clipboard: {e}"))?
-        .set_image(data)
-        .map_err(|e| format!("clipboard: {e}"))
-}
-
-/// Revela o arquivo no gerenciador do SO (mais nativo possível).
-fn reveal_in_folder(path: &Path) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path.display()))
-            .status()
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let ok = std::process::Command::new("open")
-            .arg("-R")
-            .arg(path)
-            .status()
-            .map_err(|e| e.to_string())?;
-        return ok
-            .success()
-            .then_some(())
-            .ok_or_else(|| String::from("open -R falhou"));
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        let parent = path
-            .parent()
-            .ok_or_else(|| String::from("pasta inválida"))?;
-        let ok = std::process::Command::new("xdg-open")
-            .arg(parent)
-            .status()
-            .map_err(|e| e.to_string())?;
-        ok.success()
-            .then_some(())
-            .ok_or_else(|| String::from("xdg-open falhou"))
-    }
-}
-
 /// Abas do dock (painéis redimensionáveis arrastando bordas e abas).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DockTab {
@@ -367,7 +310,7 @@ impl PhotoShowApp {
             preserve_on_scan: None,
             thumb_viewport: None,
         };
-        app.apply_theme(&cc.egui_ctx);
+        theme::apply(&app.cfg.theme, &cc.egui_ctx);
         // Reabre a última pasta para navegação imediata.
         if app.cfg.open_last_on_startup
             && let Some(dir) = app.cfg.last_folder.clone()
@@ -390,42 +333,6 @@ impl PhotoShowApp {
         // Miniaturas abaixo do visualizador (~20%).
         surface.split_below(viewer_node, 0.80, vec![DockTab::Filmstrip]);
         dock
-    }
-
-    /// Aplica o tema visual configurado (egui-elegance) + ajustes Apple HIG.
-    fn apply_theme(&self, ctx: &egui::Context) {
-        let theme = match self.cfg.theme.as_str() {
-            "charcoal" => elegance::Theme::charcoal(),
-            "frost" => elegance::Theme::frost(),
-            "paper" => elegance::Theme::paper(),
-            _ => elegance::Theme::slate(),
-        };
-        theme.install(ctx);
-        Self::tune_style(ctx);
-    }
-
-    /// Azul de destaque estilo Apple (legível nos temas claro e escuro).
-    const ACCENT: egui::Color32 = egui::Color32::from_rgb(10, 132, 255);
-
-    /// Refinos por cima do tema: cantos, respiro e seleção (Apple HIG).
-    fn tune_style(ctx: &egui::Context) {
-        ctx.all_styles_mut(|s| {
-            s.spacing.item_spacing = egui::Vec2::new(8.0, 6.0);
-            s.spacing.button_padding = egui::Vec2::new(10.0, 6.0);
-            s.visuals.selection.bg_fill = Self::ACCENT;
-            s.visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-            for w in [
-                &mut s.visuals.widgets.noninteractive,
-                &mut s.visuals.widgets.inactive,
-                &mut s.visuals.widgets.hovered,
-                &mut s.visuals.widgets.active,
-                &mut s.visuals.widgets.open,
-            ] {
-                w.corner_radius = egui::CornerRadius::same(8);
-            }
-            s.visuals.window_corner_radius = egui::CornerRadius::same(12);
-            s.visuals.menu_corner_radius = egui::CornerRadius::same(8);
-        });
     }
 
     /// Persiste config; erro vira status (nunca quebra o app).
@@ -1822,7 +1729,7 @@ impl PhotoShowApp {
         match action {
             ImgAction::CopyPath => {
                 let s = cur.path().display().to_string();
-                match copy_text_to_clipboard(&s) {
+                match platform::copy_text_to_clipboard(&s) {
                     Ok(()) => self.status = String::from("Caminho copiado."),
                     Err(e) => self.status = e,
                 }
@@ -1839,7 +1746,7 @@ impl PhotoShowApp {
                 self.status = String::from("Preparando imagem para o clipboard…");
                 std::thread::spawn(move || {
                     let note = match decode_full_photo(&path) {
-                        Ok(image) => match copy_image_to_clipboard(&image) {
+                        Ok(image) => match platform::copy_image_to_clipboard(&image) {
                             Ok(()) => String::from("Imagem copiada."),
                             Err(error) => format!("Falha ao copiar imagem: {error}"),
                         },
@@ -1850,12 +1757,12 @@ impl PhotoShowApp {
                 });
             }
             ImgAction::OpenDefault => {
-                if let Err(e) = open::that(cur.path()) {
-                    self.status = format!("Falha ao abrir: {e}");
+                if let Err(error) = platform::open_default(cur.path()) {
+                    self.status = error;
                 }
             }
             ImgAction::Reveal => {
-                if let Err(e) = reveal_in_folder(cur.path()) {
+                if let Err(e) = platform::reveal_in_folder(cur.path()) {
                     self.status = e;
                 }
             }
@@ -1975,7 +1882,7 @@ impl PhotoShowApp {
                     );
                     if self.cfg.theme != before {
                         if THEMES.contains(&self.cfg.theme.as_str()) {
-                            self.apply_theme(ui.ctx());
+                            theme::apply(&self.cfg.theme, ui.ctx());
                         } else {
                             self.cfg.theme = before;
                         }
@@ -2105,7 +2012,7 @@ impl PhotoShowApp {
                                 ui.painter().rect_stroke(
                                     response.rect.expand(2.0),
                                     8.0,
-                                    egui::Stroke::new(2.5, Self::ACCENT),
+                                    egui::Stroke::new(2.5, theme::ACCENT),
                                     egui::StrokeKind::Outside,
                                 );
                             }
