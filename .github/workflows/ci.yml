@@ -91,7 +91,55 @@ jobs:
           go run ./cmd/prumo validate "$GITHUB_WORKSPACE"
           go run ./cmd/prumo --json doctor "$GITHUB_WORKSPACE"
 
-      - name: Verify UI contract
+      - name: Verify declared UI contract
         run: |
           cd "$RUNNER_TEMP/prumo"
-          go run ./cmd/prumo ui verify --path "$GITHUB_WORKSPACE"
+
+          # Prumo 0.6 currently instantiates GoSymbolDeriver even when the
+          # project's derivation mode is "off". PhotoShow is Rust, so validate
+          # the declared map with Prumo's own loader/vocabulary/validator while
+          # deliberately omitting implementation-symbol derivation.
+          go run ./cmd/prumo ui config --path "$GITHUB_WORKSPACE"
+
+          mkdir -p cmd/photoshow-uimap-check
+          cat > cmd/photoshow-uimap-check/main.go <<'EOF'
+          package main
+
+          import (
+              "fmt"
+              "os"
+
+              "github.com/raillen/prumo/internal/uimap"
+          )
+
+          func main() {
+              root := os.Getenv("GITHUB_WORKSPACE")
+              cfg, err := uimap.ResolveConfig(root)
+              if err != nil {
+                  panic(err)
+              }
+              if !cfg.Enabled {
+                  panic("PhotoShow interface map unexpectedly disabled")
+              }
+              if cfg.Derivation != "off" {
+                  panic("PhotoShow Rust UI requires derivation=off until a Rust symbol deriver exists")
+              }
+              m, err := uimap.Load(cfg.Path)
+              if err != nil {
+                  panic(err)
+              }
+              vocab, err := uimap.LoadVocabulary(root, m)
+              if err != nil {
+                  panic(err)
+              }
+              report := uimap.Validate(root, m, vocab, nil)
+              for _, finding := range report.Findings {
+                  fmt.Printf("%s %s [%s]: %s\n", finding.Severity, finding.Code, finding.Node, finding.Message)
+              }
+              if !report.OK() {
+                  os.Exit(1)
+              }
+              fmt.Printf("declared UI map valid: %d elements, %d edges\n", report.Elements, report.Edges)
+          }
+          EOF
+          go run ./cmd/photoshow-uimap-check
