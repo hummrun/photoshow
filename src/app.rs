@@ -1373,8 +1373,6 @@ impl PhotoShowApp {
             self.settings_open = false;
         }
     }
-
-
 }
 
 /// Alça mais próxima do ponto (raio [`HANDLE_GRAB`]); retorna (alça, âncora).
