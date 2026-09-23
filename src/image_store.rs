@@ -304,8 +304,7 @@ impl ImageStore {
     fn trim_prefetch(&mut self) {
         while self.prefetch.len() > PREFETCH_CAP
             || (self.prefetch_budget_bytes == 0 && !self.prefetch.is_empty())
-            || (self.prefetch_budget_bytes > 0
-                && self.prefetch_bytes > self.prefetch_budget_bytes)
+            || (self.prefetch_budget_bytes > 0 && self.prefetch_bytes > self.prefetch_budget_bytes)
         {
             let Some(oldest) = self.prefetch_order.pop_front() else {
                 break;
@@ -404,7 +403,10 @@ mod tests {
         let decoded = decode_photo(&path).expect("decode");
 
         assert_eq!(decoded.full_size, (32, 24));
-        assert_eq!((decoded.display.width(), decoded.display.height()), (32, 24));
+        assert_eq!(
+            (decoded.display.width(), decoded.display.height()),
+            (32, 24)
+        );
         assert_eq!(decoded.frame.byte_len(), 32 * 24 * 4);
     }
 
@@ -429,8 +431,7 @@ mod tests {
 
     #[test]
     fn decode_missing_file_errors() {
-        let error =
-            decode_photo(Path::new("/nao/existe/foto.png")).expect_err("deveria falhar");
+        let error = decode_photo(Path::new("/nao/existe/foto.png")).expect_err("deveria falhar");
         assert!(matches!(error, LoadError::Io(_)));
     }
 }
