@@ -142,3 +142,29 @@ mod tests {
         assert_eq!(std::fs::read(&path).expect("read"), b"original");
     }
 }
+
+    #[test]
+    fn failure_after_temp_write_preserves_original_and_cleans_temp() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("photo.jpg");
+        std::fs::write(&path, b"original").expect("seed");
+
+        let error = write_atomic(&path, |temp| {
+            std::fs::write(temp, b"new-but-not-promoted")
+                .map_err(|write_error| write_error.to_string())?;
+            Err(String::from("injected failure before promotion"))
+        })
+        .expect_err("promotion must not run");
+
+        assert!(error.contains("before promotion"));
+        assert_eq!(std::fs::read(&path).expect("read"), b"original");
+
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".photoshow-tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "temporary files leaked: {leftovers:?}");
+    }
+
