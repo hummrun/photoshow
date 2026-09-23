@@ -1,10 +1,53 @@
 {
-  "name": "photoshow",
-  "description": "Visualizador de fotos rápido com egui 0.36: abrir pastas/arquivos, navegar, zoom/pan/fullscreen, edição não-destrutiva rotate/crop.",
-  "profile": "desktop-gui",
-  "stack": ["rust", "eframe-0.36", "egui-0.36", "egui_taffy", "image-processing", "rfd-native-dialog"],
-  "features": ["open-folder", "open-files", "thumbnails", "zoom-pan-fullscreen", "rotate-crop-nondestructive", "exif-auto-rotate", "save-save-as"],
-  "risks": ["filesystem-write"],
-  "capabilities": ["desktop-gui", "ui", "core"],
-  "ai": {"preferred_models": ["local-default", "cloud-standard"]}
+  "version": 2,
+  "project": {
+    "name": "photoshow",
+    "type": ["desktop", "desktop-gui"]
+  },
+  "stack": {
+    "languages": ["rust"],
+    "runtime": ["eframe", "egui"],
+    "tooling": ["cargo", "rustfmt", "clippy"]
+  },
+  "features": [
+    "photo-viewer",
+    "filesystem-navigation",
+    "thumbnail-gallery",
+    "zoom-pan",
+    "non-destructive-editing",
+    "metadata",
+    "desktop-ui",
+    "packaging"
+  ],
+  "quality": {
+    "performance": "high",
+    "accessibility": true,
+    "security": "standard"
+  },
+  "risk": [
+    "filesystem-write",
+    "performance-critical",
+    "large-media-memory"
+  ],
+  "ai": {
+    "orchestrator": "native",
+    "autonomy": "controlled",
+    "preferred_models": [
+      {
+        "id": "openai/gpt-5.6-sol",
+        "provider": "openai",
+        "notes": "Architecture, review, complex Rust changes and release-critical work."
+      },
+      {
+        "id": "moonshot/kimi-k3",
+        "provider": "moonshot",
+        "notes": "Implementation support and broad repository analysis."
+      },
+      {
+        "id": "deepseek/v4.1-flash",
+        "provider": "deepseek",
+        "notes": "Fast implementation and routine refactors with verification gates."
+      }
+    ]
+  }
 }
