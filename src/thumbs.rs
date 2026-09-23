@@ -5,7 +5,7 @@
 //! generation requests before decoding them.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -31,7 +31,7 @@ struct ThumbMsg {
     result: Option<egui::ColorImage>,
 }
 
-fn decode_thumb(path: &PathBuf) -> Option<egui::ColorImage> {
+fn decode_thumb(path: &Path) -> Option<egui::ColorImage> {
     let oriented = decode_full_photo(path).ok()?;
     let thumb = oriented.thumbnail(THUMB_MAX, THUMB_MAX);
     let rgba = thumb.to_rgba8();
