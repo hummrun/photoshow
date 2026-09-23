@@ -2,6 +2,10 @@ name: performance-evidence
 
 on:
   workflow_dispatch:
+  push:
+    branches: ["refactor/prumo-performance-hardening"]
+    paths:
+      - ".github/workflows/performance.yml"
 
 permissions:
   contents: read
