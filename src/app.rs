@@ -267,7 +267,7 @@ impl PhotoShowApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Galeria nativa: 1 passe basta (taffy removido).
         cc.egui_ctx.options_mut(|o| {
-            o.max_passes = std::num::NonZeroUsize::new(1).expect("1 > 0");
+            o.max_passes = std::num::NonZeroUsize::new(1).unwrap_or(std::num::NonZeroUsize::MIN);
         });
         // Ícones Phosphor como fallback da fonte proporcional.
         let mut fonts = egui::FontDefinitions::default();
@@ -714,15 +714,14 @@ impl PhotoShowApp {
             .parent()
             .map(|p| p.join(&new_name))
             .unwrap_or_else(|| PathBuf::from(&new_name));
-        // Valida a extensão antes de tocar no disco.
-        if PhotoPath::new(dest.clone()).is_none() {
+        // Valida e materializa o novo handle antes de tocar no disco.
+        let Some(new_photo) = PhotoPath::new(dest.clone()) else {
             self.status = String::from("Use um nome com extensão de imagem (.jpg, .png, …).");
             self.rename_open = false;
             return;
-        }
+        };
         match fs_browser::rename_photo(&old_path, &new_name) {
             Ok(dest) => {
-                let new_photo = PhotoPath::new(dest.clone()).expect("extensão validada");
                 for list in [&mut self.photos, &mut self.visible] {
                     for p in list.iter_mut() {
                         if p.path() == old_path {
