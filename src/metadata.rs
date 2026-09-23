@@ -1,19 +1,20 @@
-//! Embedded image metadata capture and preservation policy.
+//! Embedded image metadata capture and preservation.
 //!
-//! PhotoShow applies EXIF orientation to decoded pixels. Re-embedding a non-identity
-//! orientation tag would make compatible viewers rotate the already-oriented pixels
-//! again, so raw EXIF is preserved only when orientation is identity. ICC profiles
-//! are preserved whenever the destination encoder supports them.
+//! PhotoShow applies EXIF orientation to pixels during decode. Before re-encoding,
+//! the raw EXIF chunk has its Orientation field normalized to NoTransforms using
+//! image's metadata helper. That preserves the rest of EXIF without causing a
+//! second rotation in standards-compliant viewers.
 
 use std::path::Path;
 
+use image::metadata::Orientation;
 use image::{ImageDecoder, ImageEncoder};
 
 #[derive(Debug, Default, Clone)]
 pub struct EmbeddedMetadata {
     pub exif: Option<Vec<u8>>,
     pub icc: Option<Vec<u8>>,
-    pub orientation: u16,
+    pub exif_orientation_normalized: bool,
     pub read_error: Option<String>,
 }
 
@@ -23,7 +24,7 @@ pub struct MetadataReport {
     pub icc_present: bool,
     pub exif_preserved: bool,
     pub icc_preserved: bool,
-    pub exif_skipped_for_orientation: bool,
+    pub exif_orientation_normalized: bool,
     pub read_error: Option<String>,
 }
 
@@ -35,11 +36,7 @@ impl MetadataReport {
         }
         let mut notes = Vec::new();
         if self.exif_present && !self.exif_preserved {
-            if self.exif_skipped_for_orientation {
-                notes.push("EXIF omitido para evitar rotação duplicada");
-            } else {
-                notes.push("EXIF não preservado pelo formato");
-            }
+            notes.push("EXIF não preservado pelo formato");
         }
         if self.icc_present && !self.icc_preserved {
             notes.push("perfil ICC não preservado pelo formato");
@@ -54,12 +51,10 @@ impl MetadataReport {
 
 #[must_use]
 pub fn read_embedded_metadata(path: &Path) -> EmbeddedMetadata {
-    let orientation = crate::exif::read_orientation(path);
     let reader = match image::ImageReader::open(path) {
         Ok(reader) => reader,
         Err(error) => {
             return EmbeddedMetadata {
-                orientation,
                 read_error: Some(error.to_string()),
                 ..EmbeddedMetadata::default()
             };
@@ -69,7 +64,6 @@ pub fn read_embedded_metadata(path: &Path) -> EmbeddedMetadata {
         Ok(reader) => reader,
         Err(error) => {
             return EmbeddedMetadata {
-                orientation,
                 read_error: Some(error.to_string()),
                 ..EmbeddedMetadata::default()
             };
@@ -79,19 +73,23 @@ pub fn read_embedded_metadata(path: &Path) -> EmbeddedMetadata {
         Ok(decoder) => decoder,
         Err(error) => {
             return EmbeddedMetadata {
-                orientation,
                 read_error: Some(error.to_string()),
                 ..EmbeddedMetadata::default()
             };
         }
     };
 
-    let exif = decoder.exif_metadata().ok().flatten();
+    let mut exif = decoder.exif_metadata().ok().flatten();
     let icc = decoder.icc_profile().ok().flatten();
+    let exif_orientation_normalized = exif
+        .as_mut()
+        .and_then(|chunk| Orientation::remove_from_exif_chunk(chunk))
+        .is_some();
+
     EmbeddedMetadata {
         exif,
         icc,
-        orientation,
+        exif_orientation_normalized,
         read_error: None,
     }
 }
@@ -103,6 +101,7 @@ pub fn apply_to_encoder(
     let mut report = MetadataReport {
         exif_present: metadata.exif.is_some(),
         icc_present: metadata.icc.is_some(),
+        exif_orientation_normalized: metadata.exif_orientation_normalized,
         read_error: metadata.read_error.clone(),
         ..MetadataReport::default()
     };
@@ -113,14 +112,10 @@ pub fn apply_to_encoder(
         report.icc_preserved = true;
     }
 
-    if let Some(exif) = &metadata.exif {
-        if metadata.orientation <= 1 {
-            if encoder.set_exif_metadata(exif.clone()).is_ok() {
-                report.exif_preserved = true;
-            }
-        } else {
-            report.exif_skipped_for_orientation = true;
-        }
+    if let Some(exif) = &metadata.exif
+        && encoder.set_exif_metadata(exif.clone()).is_ok()
+    {
+        report.exif_preserved = true;
     }
 
     report
@@ -131,8 +126,8 @@ pub fn unsupported_report(metadata: &EmbeddedMetadata) -> MetadataReport {
     MetadataReport {
         exif_present: metadata.exif.is_some(),
         icc_present: metadata.icc.is_some(),
+        exif_orientation_normalized: metadata.exif_orientation_normalized,
         read_error: metadata.read_error.clone(),
-        exif_skipped_for_orientation: metadata.exif.is_some() && metadata.orientation > 1,
         ..MetadataReport::default()
     }
 }
@@ -142,12 +137,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn status_explains_orientation_skip() {
+    fn status_reports_metadata_that_format_cannot_preserve() {
         let report = MetadataReport {
             exif_present: true,
-            exif_skipped_for_orientation: true,
+            icc_present: true,
             ..MetadataReport::default()
         };
-        assert!(report.status_suffix().contains("rotação duplicada"));
+        let status = report.status_suffix();
+        assert!(status.contains("EXIF"));
+        assert!(status.contains("ICC"));
+    }
+
+    #[test]
+    fn fully_preserved_metadata_has_no_warning_suffix() {
+        let report = MetadataReport {
+            exif_present: true,
+            icc_present: true,
+            exif_preserved: true,
+            icc_preserved: true,
+            exif_orientation_normalized: true,
+            ..MetadataReport::default()
+        };
+        assert!(report.status_suffix().is_empty());
     }
 }
