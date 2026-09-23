@@ -12,7 +12,7 @@ use crate::config::{AppConfig, THEMES};
 use crate::editor::{CropRect, EditorStack, bake, save_baked_atomic};
 use crate::fs_browser::{self, PhotoPath, ScanOptions, ScanResult};
 use crate::icons::{self, labeled};
-use crate::image_store::{ImageStore, LoadState};
+use crate::image_store::{ImageStore, LoadState, decode_full_photo};
 use crate::thumbs::ThumbCache;
 
 /// Opções do filtro de formato (dropdown da toolbar).
@@ -40,6 +40,11 @@ struct SaveMsg {
     note: String,
     /// Arquivo sobrescrito: recarregar do disco e limpar o editor.
     reload: Option<PathBuf>,
+}
+
+/// Resultado assíncrono de cópia de imagem para o clipboard.
+struct CopyMsg {
+    note: String,
 }
 
 /// Alças de redimensionamento do crop.
@@ -287,6 +292,9 @@ pub struct PhotoShowApp {
     save_tx: Sender<SaveMsg>,
     save_rx: Receiver<SaveMsg>,
     saving: bool,
+    copy_tx: Sender<CopyMsg>,
+    copy_rx: Receiver<CopyMsg>,
+    copying: bool,
     rename_open: bool,
     rename_buf: String,
     settings_open: bool,
@@ -315,6 +323,7 @@ impl PhotoShowApp {
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
         cc.egui_ctx.set_fonts(fonts);
         let (save_tx, save_rx) = mpsc::channel();
+        let (copy_tx, copy_rx) = mpsc::channel();
         let mut app = Self {
             cfg: AppConfig::load(),
             tree_root: None,
@@ -341,6 +350,9 @@ impl PhotoShowApp {
             save_tx,
             save_rx,
             saving: false,
+            copy_tx,
+            copy_rx,
+            copying: false,
             rename_open: false,
             rename_buf: String::new(),
             settings_open: false,
@@ -802,8 +814,10 @@ impl PhotoShowApp {
     // --- Salvamento (thread) ---
 
     fn start_save(&mut self, ctx: &egui::Context, dest: PathBuf, overwrite: bool) {
-        let (Some(full), Some(base)) = (self.store.full_image(), self.store.display_base_dims())
-        else {
+        let (Some(source), Some(base)) = (
+            self.current.as_ref().map(|photo| photo.path().to_path_buf()),
+            self.store.display_base_dims(),
+        ) else {
             self.status = String::from("Nada para salvar.");
             return;
         };
@@ -814,14 +828,22 @@ impl PhotoShowApp {
         self.saving = true;
         self.status = String::from("Salvando…");
         std::thread::spawn(move || {
-            let baked = bake(&full, base, &state);
-            let msg = match save_baked_atomic(&baked, &dest, quality) {
-                Ok(()) => SaveMsg {
-                    note: format!("Salvo em {}", dest.display()),
-                    reload: overwrite.then_some(dest),
-                },
-                Err(e) => SaveMsg {
-                    note: format!("Falha ao salvar: {e}"),
+            let msg = match decode_full_photo(&source) {
+                Ok(full) => {
+                    let baked = bake(&full, base, &state);
+                    match save_baked_atomic(&baked, &dest, quality) {
+                        Ok(()) => SaveMsg {
+                            note: format!("Salvo em {}", dest.display()),
+                            reload: overwrite.then_some(dest),
+                        },
+                        Err(error) => SaveMsg {
+                            note: format!("Falha ao salvar: {error}"),
+                            reload: None,
+                        },
+                    }
+                }
+                Err(error) => SaveMsg {
+                    note: format!("Falha ao decodificar original para salvar: {error}"),
                     reload: None,
                 },
             };
@@ -889,12 +911,20 @@ impl PhotoShowApp {
             }
         }
     }
+
+    fn poll_copies(&mut self) {
+        while let Ok(msg) = self.copy_rx.try_recv() {
+            self.copying = false;
+            self.status = msg.note;
+        }
+    }
 }
 
 impl eframe::App for PhotoShowApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let _ = self.store.poll(ui.ctx());
         self.poll_saves(ui.ctx());
+        self.poll_copies();
         self.poll_scans(ui.ctx());
         if let Some(s) = self.sel {
             let max_bytes = self.cfg.prefetch_max_mb * 1024 * 1024;
@@ -1109,7 +1139,8 @@ impl eframe::App for PhotoShowApp {
                         LoadState::Empty => String::new(),
                     };
                     let saving = if self.saving { " · salvando…" } else { "" };
-                    ui.label(format!("{pos}  {}  {detail}{saving}", self.status));
+                    let copying = if self.copying { " · copiando…" } else { "" };
+                    ui.label(format!("{pos}  {}  {detail}{saving}{copying}", self.status));
                 });
             });
 
@@ -1723,7 +1754,7 @@ impl PhotoShowApp {
             }
         });
         if let Some(a) = action {
-            self.run_img_action(a);
+            self.run_img_action(ui.ctx(), a);
         }
     }
 
@@ -1772,7 +1803,7 @@ impl PhotoShowApp {
     }
 
     /// Executa a ação do menu de contexto.
-    fn run_img_action(&mut self, action: ImgAction) {
+    fn run_img_action(&mut self, ctx: &egui::Context, action: ImgAction) {
         let Some(cur) = self.current.clone() else {
             return;
         };
@@ -1784,13 +1815,28 @@ impl PhotoShowApp {
                     Err(e) => self.status = e,
                 }
             }
-            ImgAction::CopyImage => match self.store.full_image() {
-                Some(img) => match copy_image_to_clipboard(&img) {
-                    Ok(()) => self.status = String::from("Imagem copiada."),
-                    Err(e) => self.status = e,
-                },
-                None => self.status = String::from("Imagem ainda carregando."),
-            },
+            ImgAction::CopyImage => {
+                if self.copying {
+                    self.status = String::from("Cópia de imagem já em andamento…");
+                    return;
+                }
+                let path = cur.path().to_path_buf();
+                let tx = self.copy_tx.clone();
+                let repaint = ctx.clone();
+                self.copying = true;
+                self.status = String::from("Preparando imagem para o clipboard…");
+                std::thread::spawn(move || {
+                    let note = match decode_full_photo(&path) {
+                        Ok(image) => match copy_image_to_clipboard(&image) {
+                            Ok(()) => String::from("Imagem copiada."),
+                            Err(error) => format!("Falha ao copiar imagem: {error}"),
+                        },
+                        Err(error) => format!("Falha ao decodificar imagem: {error}"),
+                    };
+                    let _ = tx.send(CopyMsg { note });
+                    repaint.request_repaint();
+                });
+            }
             ImgAction::OpenDefault => {
                 if let Err(e) = open::that(cur.path()) {
                     self.status = format!("Falha ao abrir: {e}");
