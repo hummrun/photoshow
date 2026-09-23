@@ -3,6 +3,7 @@
 //! Tipos de domínio (anti-primitivo): [`PhotoPath`] em vez de `String` solta.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 
 /// Extensões suportadas no MVP (minúsculas, sem ponto).
@@ -76,20 +77,53 @@ pub fn has_supported_extension(path: &Path) -> bool {
 /// outra pasta antes de terminar, o resultado obsoleto é descartado pelo app.
 /// Usa o crate `ignore`: pula `.git` sempre, ocultas e `gitignore` conforme
 /// as opções (rápido em árvores com milhares de arquivos não-imagem).
-pub fn scan_dir_async(dir: PathBuf, opts: ScanOptions, id: u64) -> mpsc::Receiver<ScanResult> {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let (photos, files_seen, errors_seen, sample_errors) = walk_photos(&dir, opts);
-        let _ = tx.send(ScanResult {
-            id,
-            dir,
-            photos,
-            files_seen,
-            errors_seen,
-            sample_errors,
+#[derive(Debug, Clone, Default)]
+pub struct ScanController {
+    generation: Arc<AtomicU64>,
+}
+
+impl ScanController {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Starts a scan and invalidates every older scan owned by this controller.
+    ///
+    /// Old workers observe the generation while walking and stop before doing
+    /// the rest of the filesystem IO. They do not emit a result.
+    pub fn scan(
+        &self,
+        dir: PathBuf,
+        opts: ScanOptions,
+        id: u64,
+    ) -> mpsc::Receiver<ScanResult> {
+        self.generation.store(id, Ordering::Release);
+        let active_generation = Arc::clone(&self.generation);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let Some((photos, files_seen, errors_seen, sample_errors)) =
+                walk_photos(&dir, opts, &active_generation, id)
+            else {
+                return;
+            };
+            let _ = tx.send(ScanResult {
+                id,
+                dir,
+                photos,
+                files_seen,
+                errors_seen,
+                sample_errors,
+            });
         });
-    });
-    rx
+        rx
+    }
+}
+
+/// Convenience scanner for isolated callers/tests. Application code should keep
+/// one ScanController so newer requests can cancel older walks.
+pub fn scan_dir_async(dir: PathBuf, opts: ScanOptions, id: u64) -> mpsc::Receiver<ScanResult> {
+    ScanController::new().scan(dir, opts, id)
 }
 
 /// Opções da varredura (espelham as preferências do menu ⚙).
@@ -122,7 +156,12 @@ fn is_skipped_dir(entry: &ignore::DirEntry) -> bool {
         && entry.file_name().to_string_lossy() == ".git"
 }
 
-fn walk_photos(dir: &Path, opts: ScanOptions) -> (Vec<PhotoPath>, u64, u64, Vec<String>) {
+fn walk_photos(
+    dir: &Path,
+    opts: ScanOptions,
+    active_generation: &AtomicU64,
+    id: u64,
+) -> Option<(Vec<PhotoPath>, u64, u64, Vec<String>)> {
     const ERROR_SAMPLE_CAP: usize = 5;
 
     let mut builder = ignore::WalkBuilder::new(dir);
@@ -142,6 +181,9 @@ fn walk_photos(dir: &Path, opts: ScanOptions) -> (Vec<PhotoPath>, u64, u64, Vec<
     let mut sample_errors = Vec::new();
 
     for result in builder.build() {
+        if active_generation.load(Ordering::Acquire) != id {
+            return None;
+        }
         let entry = match result {
             Ok(entry) => entry,
             Err(error) => {
@@ -162,14 +204,14 @@ fn walk_photos(dir: &Path, opts: ScanOptions) -> (Vec<PhotoPath>, u64, u64, Vec<
     }
 
     photos.sort_by(|left, right| left.sort_key().cmp(right.sort_key()));
-    (photos, files_seen, errors_seen, sample_errors)
+    Some((photos, files_seen, errors_seen, sample_errors))
 }
 
 /// Filtra uma lista solta de arquivos (diálogo rfd) para fotos válidas.
 #[must_use]
 pub fn filter_loose_files(paths: Vec<PathBuf>) -> Vec<PhotoPath> {
     let mut photos: Vec<PhotoPath> = paths.into_iter().filter_map(PhotoPath::new).collect();
-    photos.sort_by_cached_key(|photo| photo.display_name().to_lowercase());
+    photos.sort_by(|left, right| left.sort_key().cmp(right.sort_key()));
     photos
 }
 
