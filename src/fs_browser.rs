@@ -92,12 +92,7 @@ impl ScanController {
     ///
     /// Old workers observe the generation while walking and stop before doing
     /// the rest of the filesystem IO. They do not emit a result.
-    pub fn scan(
-        &self,
-        dir: PathBuf,
-        opts: ScanOptions,
-        id: u64,
-    ) -> mpsc::Receiver<ScanResult> {
+    pub fn scan(&self, dir: PathBuf, opts: ScanOptions, id: u64) -> mpsc::Receiver<ScanResult> {
         self.generation.store(id, Ordering::Release);
         let active_generation = Arc::clone(&self.generation);
         let (tx, rx) = mpsc::channel();
@@ -119,7 +114,6 @@ impl ScanController {
         rx
     }
 }
-
 
 /// Opções da varredura (espelham as preferências do menu ⚙).
 #[derive(Debug, Clone, Copy)]
