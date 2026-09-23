@@ -248,5 +248,4 @@ impl PhotoShowApp {
         }
         false
     }
-
 }
