@@ -10,7 +10,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
 use crate::editor::EditorState;
-use crate::media::decoder::{DecodedPhoto, decode_photo};
+use crate::media::decoder::{DecodedPhoto, LoadError, decode_photo};
 use crate::media::pixels::RgbaFrame;
 
 const PREFETCH_RADIUS: isize = 2;
