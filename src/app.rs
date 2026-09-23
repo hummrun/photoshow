@@ -736,7 +736,9 @@ impl PhotoShowApp {
 
     fn start_save(&mut self, ctx: &egui::Context, dest: PathBuf, overwrite: bool) {
         let (Some(source), Some(base)) = (
-            self.current.as_ref().map(|photo| photo.path().to_path_buf()),
+            self.current
+                .as_ref()
+                .map(|photo| photo.path().to_path_buf()),
             self.store.display_base_dims(),
         ) else {
             self.status = String::from("Nada para salvar.");
@@ -1966,70 +1968,60 @@ impl PhotoShowApp {
         let mut clicked: Option<(usize, PhotoPath, bool)> = None;
         let mut viewport = None;
 
-        egui::ScrollArea::vertical().show_rows(
-            ui,
-            cell + gap,
-            total_rows,
-            |ui, row_range| {
-                let first = row_range.start.saturating_mul(columns);
-                let end = row_range
-                    .end
-                    .saturating_mul(columns)
-                    .min(self.visible.len());
-                viewport = Some((first, end));
+        egui::ScrollArea::vertical().show_rows(ui, cell + gap, total_rows, |ui, row_range| {
+            let first = row_range.start.saturating_mul(columns);
+            let end = row_range
+                .end
+                .saturating_mul(columns)
+                .min(self.visible.len());
+            viewport = Some((first, end));
 
-                for row in row_range {
-                    let start = row.saturating_mul(columns);
-                    let end = start.saturating_add(columns).min(self.visible.len());
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = gap;
-                        for index in start..end {
-                            let photo = &self.visible[index];
-                            let is_selected = Some(index) == selected;
-                            let response = match self.thumbs.get(photo.path()) {
-                                Some(texture) => {
-                                    let image = egui::Image::from_texture(
-                                        egui::load::SizedTexture::new(
-                                            texture.id(),
-                                            egui::Vec2::splat(cell - 4.0),
-                                        ),
-                                    );
-                                    ui.add_sized(
-                                        [cell - 4.0, cell - 4.0],
-                                        egui::Button::new(image).frame(false),
-                                    )
-                                }
-                                None => {
-                                    let (rect, response) = ui.allocate_exact_size(
+            for row in row_range {
+                let start = row.saturating_mul(columns);
+                let end = start.saturating_add(columns).min(self.visible.len());
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for index in start..end {
+                        let photo = &self.visible[index];
+                        let is_selected = Some(index) == selected;
+                        let response = match self.thumbs.get(photo.path()) {
+                            Some(texture) => {
+                                let image =
+                                    egui::Image::from_texture(egui::load::SizedTexture::new(
+                                        texture.id(),
                                         egui::Vec2::splat(cell - 4.0),
-                                        egui::Sense::click(),
-                                    );
-                                    ui.painter().rect_filled(
-                                        rect,
-                                        6.0,
-                                        egui::Color32::from_gray(42),
-                                    );
-                                    response
-                                }
-                            };
-
-                            if is_selected {
-                                ui.painter().rect_stroke(
-                                    response.rect.expand(2.0),
-                                    8.0,
-                                    egui::Stroke::new(2.5, theme::ACCENT),
-                                    egui::StrokeKind::Outside,
+                                    ));
+                                ui.add_sized(
+                                    [cell - 4.0, cell - 4.0],
+                                    egui::Button::new(image).frame(false),
+                                )
+                            }
+                            None => {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(cell - 4.0),
+                                    egui::Sense::click(),
                                 );
+                                ui.painter()
+                                    .rect_filled(rect, 6.0, egui::Color32::from_gray(42));
+                                response
                             }
-                            if response.clicked() {
-                                clicked =
-                                    Some((index, photo.clone(), response.double_clicked()));
-                            }
+                        };
+
+                        if is_selected {
+                            ui.painter().rect_stroke(
+                                response.rect.expand(2.0),
+                                8.0,
+                                egui::Stroke::new(2.5, theme::ACCENT),
+                                egui::StrokeKind::Outside,
+                            );
                         }
-                    });
-                }
-            },
-        );
+                        if response.clicked() {
+                            clicked = Some((index, photo.clone(), response.double_clicked()));
+                        }
+                    }
+                });
+            }
+        });
 
         self.thumb_viewport = viewport;
 
