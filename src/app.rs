@@ -397,6 +397,11 @@ impl PhotoShowApp {
         self.scan_rx = None;
         self.scanning = None;
         let dir_label = res.dir.display().to_string();
+        if res.errors_seen > 0 {
+            for error in &res.sample_errors {
+                eprintln!("photoshow scan warning: {error}");
+            }
+        }
         let error_suffix = if res.errors_seen == 0 {
             String::new()
         } else {
