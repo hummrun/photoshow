@@ -1,8 +1,117 @@
 {
+  "generated_by": {
+    "prumo": "0.6.0"
+  },
   "skills": [
+    "accessibility",
+    "architecture-quality",
+    "benchmarking",
+    "clean-code",
+    "code-review",
+    "cognitive-clarity",
+    "contrast",
+    "dependency-management",
+    "desktop-security",
+    "documentation",
+    "editor-tooling",
+    "error-handling",
+    "git-workflow",
+    "goal-management",
+    "keyboard-accessibility",
     "lang-rust",
-    "rust-analyzer-context-indexing"
+    "lean-progressive-context",
+    "memory-management",
+    "performance-native",
+    "project-intelligence",
+    "prumo-navigation",
+    "refactoring",
+    "release-engineering",
+    "rust-analyzer-context-indexing",
+    "testing-quality",
+    "ui-implementation"
   ],
-  "updated": "2026-09-19T04:52:39Z",
-  "version": "0.6.0"
+  "reasons": {
+    "accessibility": [
+      "risk-rule:accessibility-risk"
+    ],
+    "architecture-quality": [
+      "core"
+    ],
+    "benchmarking": [
+      "risk",
+      "risk-rule:performance-risk"
+    ],
+    "clean-code": [
+      "core"
+    ],
+    "code-review": [
+      "core"
+    ],
+    "cognitive-clarity": [
+      "core"
+    ],
+    "contrast": [
+      "risk-rule:accessibility-risk"
+    ],
+    "dependency-management": [
+      "core"
+    ],
+    "desktop-security": [
+      "bundle:desktop",
+      "project-type"
+    ],
+    "documentation": [
+      "core"
+    ],
+    "editor-tooling": [
+      "bundle:desktop"
+    ],
+    "error-handling": [
+      "core"
+    ],
+    "git-workflow": [
+      "core"
+    ],
+    "goal-management": [
+      "core"
+    ],
+    "keyboard-accessibility": [
+      "risk-rule:accessibility-risk"
+    ],
+    "lang-rust": [
+      "stack"
+    ],
+    "lean-progressive-context": [
+      "core"
+    ],
+    "memory-management": [
+      "risk"
+    ],
+    "performance-native": [
+      "bundle:desktop",
+      "risk",
+      "risk-rule:performance-risk"
+    ],
+    "project-intelligence": [
+      "core"
+    ],
+    "prumo-navigation": [
+      "core"
+    ],
+    "refactoring": [
+      "core"
+    ],
+    "release-engineering": [
+      "core"
+    ],
+    "rust-analyzer-context-indexing": [
+      "stack"
+    ],
+    "testing-quality": [
+      "core"
+    ],
+    "ui-implementation": [
+      "bundle:desktop"
+    ]
+  }
 }
