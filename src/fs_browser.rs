@@ -20,8 +20,6 @@ impl PhotoPath {
     }
 
     /// Caminho interno.
-    /// TODO(Fase 2): remover o allow quando o image_store carregar por ele.
-    #[allow(dead_code)]
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.0
@@ -55,12 +53,14 @@ pub fn has_supported_extension(path: &Path) -> bool {
 pub fn scan_dir_async(dir: PathBuf, opts: ScanOptions, id: u64) -> mpsc::Receiver<ScanResult> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let (photos, files_seen) = walk_photos(&dir, opts);
+        let (photos, files_seen, errors_seen, sample_errors) = walk_photos(&dir, opts);
         let _ = tx.send(ScanResult {
             id,
             dir,
             photos,
             files_seen,
+            errors_seen,
+            sample_errors,
         });
     });
     rx
@@ -85,6 +85,10 @@ pub struct ScanResult {
     pub photos: Vec<PhotoPath>,
     /// Arquivos inspecionados (para o status "N verificados").
     pub files_seen: u64,
+    /// Entradas que falharam por IO/permissão durante a caminhada.
+    pub errors_seen: u64,
+    /// Pequena amostra para diagnóstico sem acumular mensagens de árvores enormes.
+    pub sample_errors: Vec<String>,
 }
 
 fn is_skipped_dir(entry: &ignore::DirEntry) -> bool {
@@ -92,7 +96,9 @@ fn is_skipped_dir(entry: &ignore::DirEntry) -> bool {
         && entry.file_name().to_string_lossy() == ".git"
 }
 
-fn walk_photos(dir: &Path, opts: ScanOptions) -> (Vec<PhotoPath>, u64) {
+fn walk_photos(dir: &Path, opts: ScanOptions) -> (Vec<PhotoPath>, u64, u64, Vec<String>) {
+    const ERROR_SAMPLE_CAP: usize = 5;
+
     let mut builder = ignore::WalkBuilder::new(dir);
     builder
         .hidden(opts.skip_hidden)
@@ -103,34 +109,41 @@ fn walk_photos(dir: &Path, opts: ScanOptions) -> (Vec<PhotoPath>, u64) {
         .require_git(false)
         .follow_links(false)
         .filter_entry(|e| !is_skipped_dir(e));
+
     let mut photos = Vec::new();
     let mut files_seen = 0u64;
-    for entry in builder.build().filter_map(Result::ok) {
+    let mut errors_seen = 0u64;
+    let mut sample_errors = Vec::new();
+
+    for result in builder.build() {
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(error) => {
+                errors_seen += 1;
+                if sample_errors.len() < ERROR_SAMPLE_CAP {
+                    sample_errors.push(error.to_string());
+                }
+                continue;
+            }
+        };
         if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
             continue;
         }
         files_seen += 1;
-        if let Some(p) = PhotoPath::new(entry.path().to_path_buf()) {
-            photos.push(p);
+        if let Some(photo) = PhotoPath::new(entry.path().to_path_buf()) {
+            photos.push(photo);
         }
     }
-    photos.sort_by(|a, b| {
-        a.display_name()
-            .to_lowercase()
-            .cmp(&b.display_name().to_lowercase())
-    });
-    (photos, files_seen)
+
+    photos.sort_by_cached_key(|photo| photo.display_name().to_lowercase());
+    (photos, files_seen, errors_seen, sample_errors)
 }
 
 /// Filtra uma lista solta de arquivos (diálogo rfd) para fotos válidas.
 #[must_use]
 pub fn filter_loose_files(paths: Vec<PathBuf>) -> Vec<PhotoPath> {
     let mut photos: Vec<PhotoPath> = paths.into_iter().filter_map(PhotoPath::new).collect();
-    photos.sort_by(|a, b| {
-        a.display_name()
-            .to_lowercase()
-            .cmp(&b.display_name().to_lowercase())
-    });
+    photos.sort_by_cached_key(|photo| photo.display_name().to_lowercase());
     photos
 }
 
