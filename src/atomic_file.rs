@@ -49,7 +49,6 @@ fn sync_parent(path: &Path) {
     }
 }
 
-
 fn promote(temp: &Path, destination: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
