@@ -69,3 +69,29 @@ jobs:
             libxcursor-dev libxi-dev libxrandr-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
       - run: cargo check --all-targets --all-features --locked
+
+
+  prumo-conformance:
+    name: Prumo 0.6 conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: false
+
+      - name: Fetch current Prumo
+        run: git clone --depth 1 https://github.com/poppy-team/prumo.git "$RUNNER_TEMP/prumo"
+
+      - name: Validate project
+        run: |
+          cd "$RUNNER_TEMP/prumo"
+          go run ./cmd/prumo validate "$GITHUB_WORKSPACE"
+          go run ./cmd/prumo --json doctor "$GITHUB_WORKSPACE"
+
+      - name: Verify UI contract
+        run: |
+          cd "$RUNNER_TEMP/prumo"
+          go run ./cmd/prumo ui verify --path "$GITHUB_WORKSPACE"
