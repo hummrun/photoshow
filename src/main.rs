@@ -12,6 +12,7 @@ mod exif;
 mod fs_browser;
 mod icons;
 mod image_store;
+mod media;
 mod thumbs;
 
 use anyhow::Context;
