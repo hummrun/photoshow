@@ -77,41 +77,80 @@ pub fn has_supported_extension(path: &Path) -> bool {
 /// outra pasta antes de terminar, o resultado obsoleto é descartado pelo app.
 /// Usa o crate `ignore`: pula `.git` sempre, ocultas e `gitignore` conforme
 /// as opções (rápido em árvores com milhares de arquivos não-imagem).
-#[derive(Debug, Clone, Default)]
+struct ScanRequest {
+    id: u64,
+    dir: PathBuf,
+    opts: ScanOptions,
+    result_tx: mpsc::Sender<ScanResult>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ScanController {
     generation: Arc<AtomicU64>,
+    request_tx: mpsc::Sender<ScanRequest>,
 }
 
 impl ScanController {
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        let generation = Arc::new(AtomicU64::new(0));
+        let active_generation = Arc::clone(&generation);
+        let (request_tx, request_rx) = mpsc::channel::<ScanRequest>();
+
+        std::thread::spawn(move || {
+            while let Ok(mut request) = request_rx.recv() {
+                // If several directory changes happened before this worker got
+                // CPU time, only the newest queued scan is useful.
+                while let Ok(newer) = request_rx.try_recv() {
+                    request = newer;
+                }
+
+                let Some((photos, files_seen, errors_seen, sample_errors)) = walk_photos(
+                    &request.dir,
+                    request.opts,
+                    &active_generation,
+                    request.id,
+                ) else {
+                    continue;
+                };
+                let _ = request.result_tx.send(ScanResult {
+                    id: request.id,
+                    dir: request.dir,
+                    photos,
+                    files_seen,
+                    errors_seen,
+                    sample_errors,
+                });
+            }
+        });
+
+        Self {
+            generation,
+            request_tx,
+        }
     }
 
     /// Starts a scan and invalidates every older scan owned by this controller.
     ///
-    /// Old workers observe the generation while walking and stop before doing
-    /// the rest of the filesystem IO. They do not emit a result.
+    /// A single persistent worker owns filesystem traversal. Superseded walks
+    /// observe the generation and abort cooperatively; queued requests collapse
+    /// to the newest one before the next traversal begins.
     pub fn scan(&self, dir: PathBuf, opts: ScanOptions, id: u64) -> mpsc::Receiver<ScanResult> {
         self.generation.store(id, Ordering::Release);
-        let active_generation = Arc::clone(&self.generation);
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let Some((photos, files_seen, errors_seen, sample_errors)) =
-                walk_photos(&dir, opts, &active_generation, id)
-            else {
-                return;
-            };
-            let _ = tx.send(ScanResult {
-                id,
-                dir,
-                photos,
-                files_seen,
-                errors_seen,
-                sample_errors,
-            });
+        let (result_tx, result_rx) = mpsc::channel();
+        let _ = self.request_tx.send(ScanRequest {
+            id,
+            dir,
+            opts,
+            result_tx,
         });
-        rx
+        result_rx
+    }
+}
+
+impl Default for ScanController {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
