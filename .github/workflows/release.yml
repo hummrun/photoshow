@@ -26,7 +26,20 @@ jobs:
           cp dist/photoshow.desktop "$STAGE/"
           cp assets/icons/photoshow.svg "$STAGE/"
           cp LICENSE-MIT README.md CHANGELOG.md "$STAGE/"
-          tar czf "$STAGE.tar.gz" "$STAGE"
+          tar czf "$STAGE.tar.gz" -C "$STAGE" \
+            photoshow photoshow.desktop photoshow.svg LICENSE-MIT README.md CHANGELOG.md
+
+      - name: smoke install tarball
+        run: |
+          TEST_HOME="$(mktemp -d)"
+          HOME="$TEST_HOME" \
+          BIN_DIR="$TEST_HOME/.local/bin" \
+          PHOTOSHOW_ARCHIVE="$PWD/$STAGE.tar.gz" \
+          PHOTOSHOW_VERSION="${{ github.ref_name }}" \
+            bash install.sh
+          test -x "$TEST_HOME/.local/bin/photoshow"
+          test -f "$TEST_HOME/.local/share/applications/photoshow.desktop"
+          test -f "$TEST_HOME/.local/share/icons/hicolor/scalable/apps/photoshow.svg"
       - uses: actions/upload-artifact@v4
         with:
           name: linux-tarball
@@ -93,6 +106,17 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+      - name: generate SHA-256 checksums
+        shell: bash
+        run: |
+          find . -maxdepth 1 -type f \( \
+            -name 'photoshow-*.tar.gz' -o \
+            -name 'photoshow_*.deb' -o \
+            -name 'photoshow-*.rpm' -o \
+            -name 'photoshow-*.zip' \
+          \) -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          test -s SHA256SUMS.txt
+
       - uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -100,5 +124,6 @@ jobs:
             photoshow_*.deb
             photoshow-*.rpm
             photoshow-*.zip
+            SHA256SUMS.txt
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, 'rc') }}
