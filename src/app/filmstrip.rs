@@ -117,4 +117,5 @@ impl PhotoShowApp {
                 self.toggle_maximize();
             }
         }
-    }}
+    }
+}
