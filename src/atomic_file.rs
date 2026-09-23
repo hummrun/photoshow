@@ -141,7 +141,6 @@ mod tests {
         assert!(error.contains("injected failure"));
         assert_eq!(std::fs::read(&path).expect("read"), b"original");
     }
-}
 
     #[test]
     fn failure_after_temp_write_preserves_original_and_cleans_temp() {
@@ -165,6 +164,10 @@ mod tests {
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .filter(|name| name.contains(".photoshow-tmp-"))
             .collect();
-        assert!(leftovers.is_empty(), "temporary files leaked: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "temporary files leaked: {leftovers:?}"
+        );
     }
+}
 
