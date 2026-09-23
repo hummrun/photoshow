@@ -258,6 +258,18 @@ pub fn save_baked(
     }
 }
 
+
+/// Grava primeiro em arquivo temporário no mesmo diretório e só então promove
+/// o resultado para o destino. O original nunca é truncado antes do encode
+/// terminar com sucesso.
+pub fn save_baked_atomic(
+    img: &image::DynamicImage,
+    dest: &std::path::Path,
+    jpeg_quality: u8,
+) -> Result<(), String> {
+    crate::atomic_file::write_atomic(dest, |temp| save_baked(img, temp, jpeg_quality))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
