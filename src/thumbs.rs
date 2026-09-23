@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::time::Duration;
 
 use crate::media::decoder::decode_full_photo;
@@ -42,7 +42,7 @@ fn decode_thumb(path: &Path) -> Option<egui::ColorImage> {
 }
 
 pub struct ThumbCache {
-    tx: Sender<ThumbRequest>,
+    tx: SyncSender<ThumbRequest>,
     rx: Receiver<ThumbMsg>,
     cache: HashMap<PathBuf, egui::TextureHandle>,
     queued: HashSet<PathBuf>,
@@ -55,7 +55,7 @@ pub struct ThumbCache {
 impl ThumbCache {
     #[must_use]
     pub fn new() -> Self {
-        let (tx, rx) = mpsc::channel::<ThumbRequest>();
+        let (tx, rx) = mpsc::sync_channel::<ThumbRequest>(THUMB_QUEUE_CAP);
         let (res_tx, res_rx) = mpsc::channel::<ThumbMsg>();
         let worker_generation = Arc::new(AtomicU64::new(0));
         let worker_generation_ref = Arc::clone(&worker_generation);
@@ -155,18 +155,18 @@ impl ThumbCache {
             if !self.queued.insert(path.clone()) {
                 continue;
             }
-            if self
-                .tx
-                .send(ThumbRequest {
-                    generation: self.generation,
-                    path: path.clone(),
-                })
-                .is_err()
-            {
-                self.queued.remove(&path);
-                break;
+            match self.tx.try_send(ThumbRequest {
+                generation: self.generation,
+                path: path.clone(),
+            }) {
+                Ok(()) => {
+                    sent += 1;
+                }
+                Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+                    self.queued.remove(&path);
+                    break;
+                }
             }
-            sent += 1;
         }
 
         let mut received = 0usize;
