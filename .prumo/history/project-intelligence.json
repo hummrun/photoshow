@@ -34,6 +34,21 @@
         "process_peak_rss_kib": 95048,
         "release_binary_bytes": 22450136
       }
+    },
+    {
+      "id": "P01-synthetic-scan-baseline",
+      "status": "completed",
+      "evidence": {
+        "commit": "ab1de4a20ffe0b0b2c6d44d62891faddc48004d8",
+        "workflow_run": 35826785654,
+        "scan_ms": {
+          "1000": 2,
+          "10000": 13,
+          "50000": 68
+        },
+        "harness_peak_rss_kib": 95048,
+        "release_binary_bytes": 22450136
+      }
     }
   ],
   "debt": [
@@ -41,7 +56,7 @@
       "id": "photoshow-hardening-001",
       "kind": "performance-evidence",
       "status": "active",
-      "summary": "Capture startup/idle RSS, real viewer/gallery latency and representative low-end hardware evidence before closing P01."
+      "summary": "Synthetic 1k/10k/50k scan baseline captured. Remaining: startup/idle RSS, viewer/gallery frame-time and representative low-end hardware evidence."
     },
     {
       "id": "photoshow-release-001",

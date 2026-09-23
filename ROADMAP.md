@@ -39,7 +39,8 @@ Nenhuma feature grande deve furar os gates desta fase.
 - [x] fila de thumbnails é limitada e rejeita trabalho de pasta obsoleta antes do decode
 - [x] scan reporta erros de IO/permissão em vez de descartá-los silenciosamente
 - [x] sort do scan usa chave normalizada cacheada
-- [ ] registrar baseline reproduzível de startup/RSS/50k/latência conforme `docs/quality/performance-baseline.md`
+- [x] registrar baseline sintético reproduzível de scan 1k/10k/50k
+- [ ] registrar baseline de startup/idle RSS/viewer/gallery em hardware representativo conforme `docs/quality/performance-baseline.md`
 - [ ] comparar WGPU × Glow em hardware moderno e low-end antes de decidir qualquer mudança de renderer
 
 ### Arquitetura / Prumo
