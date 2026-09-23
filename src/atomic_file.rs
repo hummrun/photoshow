@@ -33,7 +33,7 @@ fn sibling_path(path: &Path, marker: &str) -> Result<PathBuf, String> {
 
 fn sync_file(path: &Path) -> Result<(), String> {
     std::fs::OpenOptions::new()
-        .read(true)
+        .write(true)
         .open(path)
         .map_err(|e| format!("open for sync {}: {e}", path.display()))?
         .sync_all()
