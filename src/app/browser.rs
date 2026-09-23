@@ -91,18 +91,18 @@ impl PhotoShowApp {
             }
             Self::section_header(ui, "Subpastas");
             let tree_h = (ui.available_height() * 0.34).clamp(90.0, 280.0);
-            let action = egui::ScrollArea::vertical()
-                .max_height(tree_h)
-                .show(ui, |ui| {
-                    Self::show_node(
-                        ui,
-                        self.tree_root.as_mut().expect("root"),
-                        self.current_dir.as_ref(),
-                        0,
-                        self.cfg.show_hidden_folders,
-                    )
-                })
-                .inner;
+            let current_dir = self.current_dir.clone();
+            let show_hidden = self.cfg.show_hidden_folders;
+            let action = if let Some(root) = self.tree_root.as_mut() {
+                egui::ScrollArea::vertical()
+                    .max_height(tree_h)
+                    .show(ui, |ui| {
+                        Self::show_node(ui, root, current_dir.as_ref(), 0, show_hidden)
+                    })
+                    .inner
+            } else {
+                None
+            };
             match action {
                 Some(TreeAction::Toggle(i)) => {
                     if let Some(root) = self.tree_root.as_mut() {
