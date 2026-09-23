@@ -55,29 +55,28 @@ fn promote(temp: &Path, destination: &Path) -> Result<(), String> {
         std::fs::rename(temp, destination)
             .map_err(|e| format!("replace {}: {e}", destination.display()))?;
         sync_parent(destination);
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(unix))]
     {
         if !destination.exists() {
             std::fs::rename(temp, destination)
-                .map_err(|e| format!("promote {}: {e}", destination.display()))?;
-            return Ok(());
-        }
+                .map_err(|e| format!("promote {}: {e}", destination.display()))
+        } else {
+            let backup = sibling_path(destination, "backup")?;
+            std::fs::rename(destination, &backup)
+                .map_err(|e| format!("backup {}: {e}", destination.display()))?;
 
-        let backup = sibling_path(destination, "backup")?;
-        std::fs::rename(destination, &backup)
-            .map_err(|e| format!("backup {}: {e}", destination.display()))?;
-
-        match std::fs::rename(temp, destination) {
-            Ok(()) => {
-                let _ = std::fs::remove_file(backup);
-                Ok(())
-            }
-            Err(error) => {
-                let _ = std::fs::rename(&backup, destination);
-                Err(format!("promote {}: {error}", destination.display()))
+            match std::fs::rename(temp, destination) {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(backup);
+                    Ok(())
+                }
+                Err(error) => {
+                    let _ = std::fs::rename(&backup, destination);
+                    Err(format!("promote {}: {error}", destination.display()))
+                }
             }
         }
     }
