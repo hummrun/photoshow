@@ -34,7 +34,7 @@ pub struct AppConfig {
     /// Pula arquivos e pastas ocultas na varredura.
     #[serde(default = "default_true")]
     pub skip_hidden: bool,
-    /// Pré-carrega vizinhos de até N MB (0 = desativa prefetch).
+    /// Orçamento de RAM decodificada para prefetch em MB (0 = desativa).
     #[serde(default = "default_prefetch_mb")]
     pub prefetch_max_mb: u64,
     /// Exibe pastas ocultas (dotfiles) na árvore de navegação.
